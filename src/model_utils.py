@@ -1,5 +1,5 @@
 from src.backbones import utae, unet3d, convlstm, convgru, fpn
-from src.panoptic import paps
+#from src.panoptic import paps
 
 
 def get_model(config, mode="semantic"):

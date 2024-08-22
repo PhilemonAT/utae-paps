@@ -16,6 +16,8 @@ import torch.nn as nn
 import torch.utils.data as data
 import torchnet as tnt
 
+import wandb
+
 from src import utils, model_utils
 from src.dataset import PASTIS_Dataset
 from src.learning.metrics import confusion_matrix_analysis
@@ -106,6 +108,13 @@ parser.add_argument(
     help="Do validation only after that many epochs.",
 )
 
+parser.add_argument(
+    "--experiment_name",
+    default="default_experiment",
+    type=str,
+    help="Name for the W&B experiment. Use this to distinguish between different runs.",
+)
+
 list_args = ["encoder_widths", "decoder_widths", "out_conv"]
 parser.set_defaults(cache=False)
 
@@ -162,6 +171,8 @@ def iterate(
         "{}_IoU".format(mode): miou,
         "{}_epoch_time".format(mode): total_time,
     }
+
+    wandb.log(metrics)
 
     if mode == "test":
         return metrics, iou_meter.conf_metric.value()  # confusion matrix
@@ -228,6 +239,10 @@ def overall_performance(config):
 
 
 def main(config):
+    experiment_name = config.experiment_name
+    wandb.init(project="utae_test", config=config, name=experiment_name)
+    wandb.config.update(vars(config))
+
     fold_sequence = [
         [[1, 2, 3], [4], [5]],
         [[2, 3, 4], [5], [1]],
@@ -395,6 +410,8 @@ def main(config):
 
     if config.fold is None:
         overall_performance(config)
+
+    wandb.finish()
 
 
 if __name__ == "__main__":
