@@ -24,13 +24,13 @@ class PASTIS_Dataset(tdata.Dataset):
         sats=["S2"],
     ):
         """
-        Pytorch Dataset class to load samples from the PASTIS dataset, for semantic and
-        panoptic segmentation.
+        Pytorch Dataset class to load samples from the PASTIS dataset, for semantic 
+        segmentation
         The Dataset yields ((data, dates), target) tuples, where:
             - data contains the image time series
             - dates contains the date sequence of the observations expressed in number
               of days since a reference date
-            - target is the semantic or instance target
+            - target is the semantic target
         Args:
             folder (str): Path to the dataset
             norm (bool): If true, images are standardised using pre-computed
@@ -41,19 +41,10 @@ class PASTIS_Dataset(tdata.Dataset):
                 of observation dates (in terms of number of days since the reference
                 date). This sequence of dates is used for instance for the positional
                 encoding in attention based approaches.
-            target (str): 'semantic' or 'instance'. Defines which type of target is
+            target (str): 'semantic'. Defines which type of target is
                 returned by the dataloader.
                 * If 'semantic' the target tensor is a tensor containing the class of
                   each pixel.
-                * If 'instance' the target tensor is the concatenation of several
-                  signals, necessary to train the Parcel-as-Points module:
-                    - the centerness heatmap,
-                    - the instance ids,
-                    - the voronoi partitioning of the patch with regards to the parcels'
-                      centers,
-                    - the (height, width) size of each parcel
-                    - the semantic label of each parcel
-                    - the semantic label of each pixel
             cache (bool): If True, the loaded samples stay in RAM, default False.
             mem16 (bool): Additional argument for cache. If True, the image time
                 series tensors are stored in half precision in RAM for efficiency.
@@ -193,68 +184,6 @@ class PASTIS_Dataset(tdata.Dataset):
 
                 if self.class_mapping is not None:
                     target = self.class_mapping(target)
-
-            elif self.target == "instance":
-                heatmap = np.load(
-                    os.path.join(
-                        self.folder,
-                        "INSTANCE_ANNOTATIONS",
-                        "HEATMAP_{}.npy".format(id_patch),
-                    )
-                )
-
-                instance_ids = np.load(
-                    os.path.join(
-                        self.folder,
-                        "INSTANCE_ANNOTATIONS",
-                        "INSTANCES_{}.npy".format(id_patch),
-                    )
-                )
-                pixel_to_object_mapping = np.load(
-                    os.path.join(
-                        self.folder,
-                        "INSTANCE_ANNOTATIONS",
-                        "ZONES_{}.npy".format(id_patch),
-                    )
-                )
-
-                pixel_semantic_annotation = np.load(
-                    os.path.join(
-                        self.folder, "ANNOTATIONS", "TARGET_{}.npy".format(id_patch)
-                    )
-                )
-
-                if self.class_mapping is not None:
-                    pixel_semantic_annotation = self.class_mapping(
-                        pixel_semantic_annotation[0]
-                    )
-                else:
-                    pixel_semantic_annotation = pixel_semantic_annotation[0]
-
-                size = np.zeros((*instance_ids.shape, 2))
-                object_semantic_annotation = np.zeros(instance_ids.shape)
-                for instance_id in np.unique(instance_ids):
-                    if instance_id != 0:
-                        h = (instance_ids == instance_id).any(axis=-1).sum()
-                        w = (instance_ids == instance_id).any(axis=-2).sum()
-                        size[pixel_to_object_mapping == instance_id] = (h, w)
-                        object_semantic_annotation[
-                            pixel_to_object_mapping == instance_id
-                        ] = pixel_semantic_annotation[instance_ids == instance_id][0]
-
-                target = torch.from_numpy(
-                    np.concatenate(
-                        [
-                            heatmap[:, :, None],  # 0
-                            instance_ids[:, :, None],  # 1
-                            pixel_to_object_mapping[:, :, None],  # 2
-                            size,  # 3-4
-                            object_semantic_annotation[:, :, None],  # 5
-                            pixel_semantic_annotation[:, :, None],  # 6
-                        ],
-                        axis=-1,
-                    )
-                ).float()
 
             if self.cache:
                 if self.mem16:
