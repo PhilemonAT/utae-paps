@@ -17,7 +17,9 @@ class PASTIS_Dataset(tdata.Dataset):
         target="semantic",
         cache=False,
         mem16=False,
+        cv_type="official",
         folds=None,
+        region_folds=None,
         reference_date="2018-09-01",
         class_mapping=None,
         mono_date=None,
@@ -49,8 +51,16 @@ class PASTIS_Dataset(tdata.Dataset):
             mem16 (bool): Additional argument for cache. If True, the image time
                 series tensors are stored in half precision in RAM for efficiency.
                 They are cast back to float32 when returned by __getitem__.
+            cv_type (str): Defines the type of cross-validation split to use.
+                * If 'official', uses the 5 official folds provided with the PASTIS 
+                dataset.
+                * If 'regions', uses a custom 4-region-based split defined by 
+                region_folds.
             folds (list, optional): List of ints specifying which of the 5 official
                 folds to load. By default (when None is specified) all folds are loaded.
+            region_folds (list, optional): List of ints specifying which of the 4
+                regions to load. Used only if cv_type='regions'. By default (when None
+                is specified) all regions are loaded.
             class_mapping (dict, optional): Dictionary to define a mapping between the
                 default 18 class nomenclature and another class grouping, optional.
             mono_date (int or str, optional): If provided only one date of the
@@ -89,6 +99,9 @@ class PASTIS_Dataset(tdata.Dataset):
         self.meta_patch.index = self.meta_patch["ID_PATCH"].astype(int)
         self.meta_patch.sort_index(inplace=True)
 
+        # Add regions column to allow for 4-fold CV using the different regions
+        self.meta_patch["Region"] = self.meta_patch["ID_PATCH"].apply(lambda x: int(str(x)[0]))
+
         self.date_tables = {s: None for s in sats}
         self.date_range = np.array(range(-200, 600))
         for s in sats:
@@ -115,11 +128,25 @@ class PASTIS_Dataset(tdata.Dataset):
 
         print("Done.")
 
-        # Select Fold samples
-        if folds is not None:
-            self.meta_patch = pd.concat(
-                [self.meta_patch[self.meta_patch["Fold"] == f] for f in folds]
-            )
+        # Select Fold samples (official PASTIS-folds or regions)
+        # Check if cv_type is correctly specified
+        if cv_type not in ["official", "regions"]:
+            raise ValueError("cv_type should be one of 'official' or 'regions'.")
+
+        if cv_type=="official":
+            if folds is not None:
+                self.meta_patch = pd.concat(
+                    [self.meta_patch[self.meta_patch["Fold"] == f] for f in folds]
+                )
+        else: # cv_type = regions
+            if region_folds is not None:
+                self.meta_patch = pd.concat(
+                    [self.meta_patch[self.meta_patch["Region"] == r] for r in region_folds]
+                )
+
+        if self.meta_patch.empty:
+            raise ValueError("The selected fold(s) or region(s) resulted in an empty dataset. "
+                             "Please check the fold/region numbers.")
 
         self.len = self.meta_patch.shape[0]
         self.id_patches = self.meta_patch.index
@@ -128,18 +155,32 @@ class PASTIS_Dataset(tdata.Dataset):
         if norm:
             self.norm = {}
             for s in self.sats:
-                with open(
-                    os.path.join(folder, "NORM_{}_patch.json".format(s)), "r"
-                ) as file:
-                    normvals = json.loads(file.read())
-                selected_folds = folds if folds is not None else range(1, 6)
-                means = [normvals["Fold_{}".format(f)]["mean"] for f in selected_folds]
-                stds = [normvals["Fold_{}".format(f)]["std"] for f in selected_folds]
-                self.norm[s] = np.stack(means).mean(axis=0), np.stack(stds).mean(axis=0)
-                self.norm[s] = (
-                    torch.from_numpy(self.norm[s][0]).float(),
-                    torch.from_numpy(self.norm[s][1]).float(),
-                )
+                if cv_type=="official":
+                    with open(
+                        os.path.join(folder, "NORM_{}_patch.json".format(s)), "r"
+                    ) as file:
+                        normvals = json.loads(file.read())
+                    selected_folds = folds if folds is not None else range(1, 6)
+                    means = [normvals["Fold_{}".format(f)]["mean"] for f in selected_folds]
+                    stds = [normvals["Fold_{}".format(f)]["std"] for f in selected_folds]
+                    self.norm[s] = np.stack(means).mean(axis=0), np.stack(stds).mean(axis=0)
+                    self.norm[s] = (
+                        torch.from_numpy(self.norm[s][0]).float(),
+                        torch.from_numpy(self.norm[s][1]).float(),
+                    )
+                else: # cv_type = regions
+                    with open(
+                        os.path.join(folder, "NORM_regions_{}_patch.json".format(s)), "r"
+                    ) as file:
+                        normvals = json.loads(file.read())
+                    selected_regions = region_folds if region_folds is not None else range(1,5)
+                    means = [normvals["Region_{}".format(f)]["mean"] for f in selected_regions]
+                    stds = [normvals["Region_{}".format(f)]["std"] for f in selected_regions]
+                    self.norm[s] = np.stack(means).mean(axis=0), np.stack(stds).mean(axis=0)
+                    self.norm[s] = (
+                        torch.from_numpy(self.norm[s][0]).float(),
+                        torch.from_numpy(self.norm[s][1]).float(),
+                    )
         else:
             self.norm = None
         print("Dataset ready.")
@@ -239,23 +280,50 @@ def prepare_dates(date_dict, reference_date):
     return d.values
 
 
-def compute_norm_vals(folder, sat):
+def compute_norm_vals(folder, sat, cv_type):
     norm_vals = {}
-    for fold in range(1, 6):
-        dt = PASTIS_Dataset(folder=folder, norm=False, folds=[fold], sats=[sat])
-        means = []
-        stds = []
-        for i, b in enumerate(dt):
-            print("{}/{}".format(i, len(dt)), end="\r")
-            data = b[0][0][sat]  # T x C x H x W
-            data = data.permute(1, 0, 2, 3).contiguous()  # C x B x T x H x W
-            means.append(data.view(data.shape[0], -1).mean(dim=-1).numpy())
-            stds.append(data.view(data.shape[0], -1).std(dim=-1).numpy())
+    
+    if cv_type=="official":
+        for fold in range(1, 6):
+            dt = PASTIS_Dataset(folder=folder, norm=False, cv_type="official", 
+                                folds=[fold], sats=[sat])
+            means = []
+            stds = []
+            for i, b in enumerate(dt):
+                print("{}/{}".format(i, len(dt)), end="\r")
+                data = b[0][0]  # T x C x H x W
+                data = data.permute(1, 0, 2, 3).contiguous()  # C x B x T x H x W
+                means.append(data.view(data.shape[0], -1).mean(dim=-1).numpy())
+                stds.append(data.view(data.shape[0], -1).std(dim=-1).numpy())
 
-        mean = np.stack(means).mean(axis=0).astype(float)
-        std = np.stack(stds).mean(axis=0).astype(float)
+            mean = np.stack(means).mean(axis=0).astype(float)
+            std = np.stack(stds).mean(axis=0).astype(float)
 
-        norm_vals["Fold_{}".format(fold)] = dict(mean=list(mean), std=list(std))
+            norm_vals["Fold_{}".format(fold)] = dict(mean=list(mean), std=list(std))
 
-    with open(os.path.join(folder, "NORM_{}_patch.json".format(sat)), "w") as file:
-        file.write(json.dumps(norm_vals, indent=4))
+        with open(os.path.join(folder, "NORM_{}_patch.json".format(sat)), "w") as file:
+            file.write(json.dumps(norm_vals, indent=4))
+    
+    elif cv_type=="regions":
+        for region in range(1, 5):
+            dt = PASTIS_Dataset(folder=folder, norm=False, cv_type="regions", 
+                                region_folds=[region], sats=[sat])
+            means = []
+            stds = []
+            for i, b in enumerate(dt):
+                print("{}/{}".format(i, len(dt)), end="\r")
+                data = b[0][0]  # T x C x H x W
+                data = data.permute(1, 0, 2, 3).contiguous()  # C x B x T x H x W
+                means.append(data.view(data.shape[0], -1).mean(dim=-1).numpy())
+                stds.append(data.view(data.shape[0], -1).std(dim=-1).numpy())
+
+            mean = np.stack(means).mean(axis=0).astype(float)
+            std = np.stack(stds).mean(axis=0).astype(float)
+
+            norm_vals["Region_{}".format(region)] = dict(mean=list(mean), std=list(std))
+        
+        with open(os.path.join(folder, "NORM_regions_{}_patch.json".format(sat)), "w") as file:
+            file.write(json.dumps(norm_vals, indent=4))
+    else:
+        raise ValueError("cv_type should be one of 'official' or 'regions'.")
+    
