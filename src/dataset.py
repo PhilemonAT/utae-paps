@@ -19,7 +19,6 @@ class PASTIS_Dataset(tdata.Dataset):
         mem16=False,
         cv_type="official",
         folds=None,
-        region_folds=None,
         reference_date="2018-09-01",
         class_mapping=None,
         mono_date=None,
@@ -54,13 +53,12 @@ class PASTIS_Dataset(tdata.Dataset):
             cv_type (str): Defines the type of cross-validation split to use.
                 * If 'official', uses the 5 official folds provided with the PASTIS 
                 dataset.
-                * If 'regions', uses a custom 4-region-based split defined by 
-                region_folds.
+                * If 'regions', uses a custom 4-region-based split
             folds (list, optional): List of ints specifying which of the 5 official
-                folds to load. By default (when None is specified) all folds are loaded.
-            region_folds (list, optional): List of ints specifying which of the 4
-                regions to load. Used only if cv_type='regions'. By default (when None
-                is specified) all regions are loaded.
+                folds or which of the 4 regions to load, respectively. By default 
+                (when None is specified) all folds are loaded.
+                Note: if cv_type = 'official', folds must be in [1,5] and if 
+                cv_type = 'regions', folds must be in [1,4].
             class_mapping (dict, optional): Dictionary to define a mapping between the
                 default 18 class nomenclature and another class grouping, optional.
             mono_date (int or str, optional): If provided only one date of the
@@ -128,20 +126,23 @@ class PASTIS_Dataset(tdata.Dataset):
 
         print("Done.")
 
-        # Select Fold samples (official PASTIS-folds or regions)
-        # Check if cv_type is correctly specified
-        if cv_type not in ["official", "regions"]:
-            raise ValueError("cv_type should be one of 'official' or 'regions'.")
+        # Validate inputs for cv_type and folds
+        assert cv_type in ["official", "regions"], "cv_type must be one of 'official' or 'regions'."
+        if folds is not None:
+            if cv_type == "official":
+                assert all(fold in range(1, 6) for fold in folds), "If cv_type='official', folds must be in the range 1 to 5."
+            elif cv_type == "regions":
+                assert all(fold in range(1, 5) for fold in folds), "If cv_type='regions', folds must be in the range 1 to 4."
 
-        if cv_type=="official":
-            if folds is not None:
+        # Select Fold samples (official PASTIS-folds or regions)
+        if folds is not None:
+            if cv_type=="official":
                 self.meta_patch = pd.concat(
                     [self.meta_patch[self.meta_patch["Fold"] == f] for f in folds]
                 )
-        else: # cv_type = regions
-            if region_folds is not None:
+            else:
                 self.meta_patch = pd.concat(
-                    [self.meta_patch[self.meta_patch["Region"] == r] for r in region_folds]
+                    [self.meta_patch[self.meta_patch["Region"] == f] for f in folds]
                 )
 
         if self.meta_patch.empty:
@@ -173,7 +174,7 @@ class PASTIS_Dataset(tdata.Dataset):
                         os.path.join(folder, "NORM_regions_{}_patch.json".format(s)), "r"
                     ) as file:
                         normvals = json.loads(file.read())
-                    selected_regions = region_folds if region_folds is not None else range(1,5)
+                    selected_regions = folds if folds is not None else range(1, 5)
                     means = [normvals["Region_{}".format(f)]["mean"] for f in selected_regions]
                     stds = [normvals["Region_{}".format(f)]["std"] for f in selected_regions]
                     self.norm[s] = np.stack(means).mean(axis=0), np.stack(stds).mean(axis=0)
@@ -305,9 +306,9 @@ def compute_norm_vals(folder, sat, cv_type):
             file.write(json.dumps(norm_vals, indent=4))
     
     elif cv_type=="regions":
-        for region in range(1, 5):
+        for fold in range(1, 5):
             dt = PASTIS_Dataset(folder=folder, norm=False, cv_type="regions", 
-                                region_folds=[region], sats=[sat])
+                                folds=[fold], sats=[sat])
             means = []
             stds = []
             for i, b in enumerate(dt):
@@ -320,7 +321,7 @@ def compute_norm_vals(folder, sat, cv_type):
             mean = np.stack(means).mean(axis=0).astype(float)
             std = np.stack(stds).mean(axis=0).astype(float)
 
-            norm_vals["Region_{}".format(region)] = dict(mean=list(mean), std=list(std))
+            norm_vals["Region_{}".format(fold)] = dict(mean=list(mean), std=list(std))
         
         with open(os.path.join(folder, "NORM_regions_{}_patch.json".format(sat)), "w") as file:
             file.write(json.dumps(norm_vals, indent=4))

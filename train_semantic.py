@@ -86,10 +86,15 @@ parser.add_argument("--lr", default=0.001, type=float, help="Learning rate")
 parser.add_argument("--mono_date", default=None, type=str)
 parser.add_argument("--ref_date", default="2018-09-01", type=str)
 parser.add_argument(
+    "--cv_type",
+    default="official",
+    type=str,
+    help="Type of cross-validation to use. Can be one of: 'official', 'regions'.")
+parser.add_argument(
     "--fold",
     default=None,
     type=int,
-    help="Do only one of the five fold (between 1 and 5)",
+    help="Do only one of the five official folds (between 1 and 5) or one of the four region folds (between 1 and 4)",
 )
 parser.add_argument("--num_classes", default=20, type=int)
 parser.add_argument("--ignore_index", default=-1, type=int)
@@ -114,6 +119,9 @@ parser.add_argument(
     type=str,
     help="Name for the W&B experiment. Use this to distinguish between different runs.",
 )
+parser.add_argument("--run_tag", default="", type=str)
+parser.add_argument("--model_tag", default="", type=str)
+parser.add_argument("--config_tag", default="", type=str)
 
 list_args = ["encoder_widths", "decoder_widths", "out_conv"]
 parser.set_defaults(cache=False)
@@ -189,41 +197,71 @@ def recursive_todevice(x, device):
         return [recursive_todevice(c, device) for c in x]
 
 
-def prepare_output(config):
+def prepare_output(config, cv_type="official"):
     os.makedirs(config.res_dir, exist_ok=True)
-    for fold in range(1, 6):
-        os.makedirs(os.path.join(config.res_dir, "Fold_{}".format(fold)), exist_ok=True)
+    if cv_type=="official":
+        for fold in range(1, 6):
+            os.makedirs(os.path.join(config.res_dir, "Fold_{}".format(fold)), exist_ok=True)
+    else:
+        for region in range(1, 5):
+            os.makedirs(os.path.join(config.res_dir, "Region_{}".format(region)), exist_ok=True)
+
+def checkpoint(fold, log, config, cv_type="official"):
+    if cv_type=="official":
+        with open(
+            os.path.join(config.res_dir, "Fold_{}".format(fold), "trainlog.json"), "w"
+        ) as outfile:
+            json.dump(log, outfile, indent=4)
+    else:
+        with open(
+            os.path.join(config.res_dir, "Region_{}".format(fold), "trainlog.json"), "w"
+        ) as outfile:
+            json.dump(log, outfile, indent=4)
 
 
-def checkpoint(fold, log, config):
-    with open(
-        os.path.join(config.res_dir, "Fold_{}".format(fold), "trainlog.json"), "w"
-    ) as outfile:
-        json.dump(log, outfile, indent=4)
-
-
-def save_results(fold, metrics, conf_mat, config):
-    with open(
-        os.path.join(config.res_dir, "Fold_{}".format(fold), "test_metrics.json"), "w"
-    ) as outfile:
-        json.dump(metrics, outfile, indent=4)
-    pkl.dump(
-        conf_mat,
-        open(
-            os.path.join(config.res_dir, "Fold_{}".format(fold), "conf_mat.pkl"), "wb"
-        ),
-    )
-
-
-def overall_performance(config):
-    cm = np.zeros((config.num_classes, config.num_classes))
-    for fold in range(1, 6):
-        cm += pkl.load(
+def save_results(fold, metrics, conf_mat, config, cv_type="official"):
+    if cv_type=="official":
+        with open(
+            os.path.join(config.res_dir, "Fold_{}".format(fold), "test_metrics.json"), "w"
+        ) as outfile:
+            json.dump(metrics, outfile, indent=4)
+        pkl.dump(
+            conf_mat,
             open(
-                os.path.join(config.res_dir, "Fold_{}".format(fold), "conf_mat.pkl"),
-                "rb",
-            )
+                os.path.join(config.res_dir, "Fold_{}".format(fold), "conf_mat.pkl"), "wb"
+            ),
         )
+    else:
+        with open(
+            os.path.join(config.res_dir, "Region_{}".format(fold), "test_metrics.json"), "w"
+        ) as outfile:
+            json.dump(metrics, outfile, indent=4)
+        pkl.dump(
+            conf_mat,
+            open(
+                os.path.join(config.res_dir, "Region_{}".format(fold), "conf_mat.pkl"), "wb"
+            ),
+        )
+
+
+def overall_performance(config, cv_type="official"):
+    cm = np.zeros((config.num_classes, config.num_classes))
+    if cv_type=="official":
+        for fold in range(1, 6):
+            cm += pkl.load(
+                open(
+                    os.path.join(config.res_dir, "Fold_{}".format(fold), "conf_mat.pkl"),
+                    "rb",
+                )
+            )
+    else:
+        for region in range(1,5):
+            cm += pkl.load(
+                open(
+                    os.path.join(config.res_dir, "Region_{}".format(region), "conf_mat.pkl"),
+                    "rb",
+                )
+            )
 
     if config.ignore_index is not None:
         cm = np.delete(cm, config.ignore_index, axis=0)
@@ -240,10 +278,11 @@ def overall_performance(config):
 
 def main(config):
     experiment_name = config.experiment_name
-    wandb.init(project="utae_test", config=config, name=experiment_name)
+    wandb.init(project="utae_test", config=config, name=experiment_name, 
+               tags=[config.run_tag, config.model_tag, config.config_tag])
     wandb.config.update(vars(config))
 
-    fold_sequence = [
+    official_fold_sequence = [
         [[1, 2, 3], [4], [5]],
         [[2, 3, 4], [5], [1]],
         [[3, 4, 5], [1], [2]],
@@ -251,18 +290,32 @@ def main(config):
         [[5, 1, 2], [3], [4]],
     ]
 
+    region_fold_sequence = [
+        [[1, 2], [3], [4]],
+        [[2, 3], [4], [1]],
+        [[3, 4], [1], [2]],
+        [[4, 1], [2], [3]],
+    ]
+
     np.random.seed(config.rdm_seed)
     torch.manual_seed(config.rdm_seed)
-    prepare_output(config)
+    prepare_output(config, cv_type=config.cv_type)
     device = torch.device(config.device)
 
-    fold_sequence = (
-        fold_sequence if config.fold is None else [fold_sequence[config.fold - 1]]
-    )
+    # Choose relevant folds (different for official CV-folds vs. CV based on region-folds)
+    if config.cv_type=="official":
+        fold_sequence = (
+            official_fold_sequence if config.fold is None else [official_fold_sequence[config.fold - 1]]
+        )
+    else:
+        fold_sequence = (
+            region_fold_sequence if config.fold is None else [region_fold_sequence[config.fold - 1]]
+        )
+
     for fold, (train_folds, val_fold, test_fold) in enumerate(fold_sequence):
         if config.fold is not None:
             fold = config.fold - 1
-
+        
         # Dataset definition
         dt_args = dict(
             folder=config.dataset_folder,
@@ -273,9 +326,9 @@ def main(config):
             sats=["S2"],
         )
 
-        dt_train = PASTIS_Dataset(**dt_args, folds=train_folds, cache=config.cache)
-        dt_val = PASTIS_Dataset(**dt_args, folds=val_fold, cache=config.cache)
-        dt_test = PASTIS_Dataset(**dt_args, folds=test_fold)
+        dt_train = PASTIS_Dataset(**dt_args, folds=train_folds, cv_type=config.cv_type, cache=config.cache)
+        dt_val = PASTIS_Dataset(**dt_args, folds=val_fold, cv_type=config.cv_type, cache=config.cache)
+        dt_test = PASTIS_Dataset(**dt_args, folds=test_fold, cv_type=config.cv_type)
 
         collate_fn = lambda x: utils.pad_collate(x, pad_value=config.pad_value)
         train_loader = data.DataLoader(
@@ -363,31 +416,53 @@ def main(config):
                 )
 
                 trainlog[epoch] = {**train_metrics, **val_metrics}
-                checkpoint(fold + 1, trainlog, config)
+                checkpoint(fold + 1, trainlog, config, cv_type=config.cv_type)
                 if val_metrics["val_IoU"] >= best_mIoU:
                     best_mIoU = val_metrics["val_IoU"]
-                    torch.save(
-                        {
-                            "epoch": epoch,
-                            "state_dict": model.state_dict(),
-                            "optimizer": optimizer.state_dict(),
-                        },
-                        os.path.join(
-                            config.res_dir, "Fold_{}".format(fold + 1), "model.pth.tar"
-                        ),
-                    )
+                    if config.cv_type=='official':
+                        torch.save(
+                            {
+                                "epoch": epoch,
+                                "state_dict": model.state_dict(),
+                                "optimizer": optimizer.state_dict(),
+                            },
+                            os.path.join(
+                                config.res_dir, "Fold_{}".format(fold + 1), "model.pth.tar"
+                            ),
+                        )
+                    else:
+                        torch.save(
+                            {
+                                "epoch": epoch,
+                                "state_dict": model.state_dict(),
+                                "optimizer": optimizer.state_dict(),
+                            },
+                            os.path.join(
+                                config.res_dir, "Region_{}".format(fold + 1), "model.pth.tar"
+                            ),
+                        )
+
             else:
                 trainlog[epoch] = {**train_metrics}
-                checkpoint(fold + 1, trainlog, config)
+                checkpoint(fold + 1, trainlog, config, cv_type=config.cv_type)
 
         print("Testing best epoch . . .")
-        model.load_state_dict(
-            torch.load(
-                os.path.join(
-                    config.res_dir, "Fold_{}".format(fold + 1), "model.pth.tar"
-                )
-            )["state_dict"]
-        )
+        if config.cv_type=='official':
+            model.load_state_dict(
+                torch.load(
+                    os.path.join(
+                        config.res_dir, "Fold_{}".format(fold + 1), "model.pth.tar"
+                    )
+                )["state_dict"]
+            )
+        else:
+            model.load_state_dict(
+                torch.load(
+                    os.path.join(
+                        config.res_dir, "Region_{}".format(fold + 1), "model.pth.tar"
+                    )
+                )["state_dict"]
+            )
         model.eval()
 
         test_metrics, conf_mat = iterate(
@@ -406,10 +481,10 @@ def main(config):
                 test_metrics["test_IoU"],
             )
         )
-        save_results(fold + 1, test_metrics, conf_mat.cpu().numpy(), config)
+        save_results(fold + 1, test_metrics, conf_mat.cpu().numpy(), config, cv_type=config.cv_type)
 
     if config.fold is None:
-        overall_performance(config)
+        overall_performance(config, cv_type=config.cv_type)
 
     wandb.finish()
 
