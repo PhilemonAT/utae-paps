@@ -201,20 +201,20 @@ def prepare_output(config, cv_type="official"):
     os.makedirs(config.res_dir, exist_ok=True)
     if cv_type=="official":
         for fold in range(1, 6):
-            os.makedirs(os.path.join(config.res_dir, "Fold_{}".format(fold)), exist_ok=True)
+            os.makedirs(os.path.join(config.res_dir, cv_type, "Fold_{}".format(fold)), exist_ok=True)
     else:
         for region in range(1, 5):
-            os.makedirs(os.path.join(config.res_dir, "Region_{}".format(region)), exist_ok=True)
+            os.makedirs(os.path.join(config.res_dir, cv_type, "Region_{}".format(region)), exist_ok=True)
 
 def checkpoint(fold, log, config, cv_type="official"):
     if cv_type=="official":
         with open(
-            os.path.join(config.res_dir, "Fold_{}".format(fold), "trainlog.json"), "w"
+            os.path.join(config.res_dir,  cv_type, "Fold_{}".format(fold), "trainlog.json"), "w"
         ) as outfile:
             json.dump(log, outfile, indent=4)
     else:
         with open(
-            os.path.join(config.res_dir, "Region_{}".format(fold), "trainlog.json"), "w"
+            os.path.join(config.res_dir,  cv_type, "Region_{}".format(fold), "trainlog.json"), "w"
         ) as outfile:
             json.dump(log, outfile, indent=4)
 
@@ -222,24 +222,24 @@ def checkpoint(fold, log, config, cv_type="official"):
 def save_results(fold, metrics, conf_mat, config, cv_type="official"):
     if cv_type=="official":
         with open(
-            os.path.join(config.res_dir, "Fold_{}".format(fold), "test_metrics.json"), "w"
+            os.path.join(config.res_dir, cv_type, "Fold_{}".format(fold), "test_metrics.json"), "w"
         ) as outfile:
             json.dump(metrics, outfile, indent=4)
         pkl.dump(
             conf_mat,
             open(
-                os.path.join(config.res_dir, "Fold_{}".format(fold), "conf_mat.pkl"), "wb"
+                os.path.join(config.res_dir, cv_type, "Fold_{}".format(fold),  "conf_mat.pkl"), "wb"
             ),
         )
     else:
         with open(
-            os.path.join(config.res_dir, "Region_{}".format(fold), "test_metrics.json"), "w"
+            os.path.join(config.res_dir, cv_type, "Region_{}".format(fold), "test_metrics.json"), "w"
         ) as outfile:
             json.dump(metrics, outfile, indent=4)
         pkl.dump(
             conf_mat,
             open(
-                os.path.join(config.res_dir, "Region_{}".format(fold), "conf_mat.pkl"), "wb"
+                os.path.join(config.res_dir, cv_type, "Region_{}".format(fold), "conf_mat.pkl"), "wb"
             ),
         )
 
@@ -250,7 +250,7 @@ def overall_performance(config, cv_type="official"):
         for fold in range(1, 6):
             cm += pkl.load(
                 open(
-                    os.path.join(config.res_dir, "Fold_{}".format(fold), "conf_mat.pkl"),
+                    os.path.join(config.res_dir, cv_type, "Fold_{}".format(fold), "conf_mat.pkl"),
                     "rb",
                 )
             )
@@ -258,7 +258,7 @@ def overall_performance(config, cv_type="official"):
         for region in range(1,5):
             cm += pkl.load(
                 open(
-                    os.path.join(config.res_dir, "Region_{}".format(region), "conf_mat.pkl"),
+                    os.path.join(config.res_dir, cv_type, "Region_{}".format(region), "conf_mat.pkl"),
                     "rb",
                 )
             )
@@ -272,13 +272,13 @@ def overall_performance(config, cv_type="official"):
     print("Overall performance:")
     print("Acc: {},  IoU: {}".format(perf["Accuracy"], perf["MACRO_IoU"]))
 
-    with open(os.path.join(config.res_dir, "overall.json"), "w") as file:
+    with open(os.path.join(config.res_dir, cv_type, "overall.json"), "w") as file:
         file.write(json.dumps(perf, indent=4))
 
 
 def main(config):
     experiment_name = config.experiment_name
-    wandb.init(project="utae_test", config=config, name=experiment_name, 
+    wandb.init(project="utae_default_v_official", config=config, name=experiment_name, 
                tags=[config.run_tag, config.model_tag, config.config_tag])
     wandb.config.update(vars(config))
 
@@ -360,7 +360,7 @@ def main(config):
         # Model definition
         model = model_utils.get_model(config, mode="semantic")
         config.N_params = utils.get_ntrainparams(model)
-        with open(os.path.join(config.res_dir, "conf.json"), "w") as file:
+        with open(os.path.join(config.res_dir, config.cv_type, "conf.json"), "w") as file:
             file.write(json.dumps(vars(config), indent=4))
         print(model)
         print("TOTAL TRAINABLE PARAMETERS :", config.N_params)
@@ -427,7 +427,7 @@ def main(config):
                                 "optimizer": optimizer.state_dict(),
                             },
                             os.path.join(
-                                config.res_dir, "Fold_{}".format(fold + 1), "model.pth.tar"
+                                config.res_dir, config.cv_type, "Fold_{}".format(fold + 1), "model.pth.tar"
                             ),
                         )
                     else:
@@ -438,7 +438,7 @@ def main(config):
                                 "optimizer": optimizer.state_dict(),
                             },
                             os.path.join(
-                                config.res_dir, "Region_{}".format(fold + 1), "model.pth.tar"
+                                config.res_dir, config.cv_type, "Region_{}".format(fold + 1), "model.pth.tar"
                             ),
                         )
 
@@ -451,7 +451,7 @@ def main(config):
             model.load_state_dict(
                 torch.load(
                     os.path.join(
-                        config.res_dir, "Fold_{}".format(fold + 1), "model.pth.tar"
+                        config.res_dir, config.cv_type, "Fold_{}".format(fold + 1), "model.pth.tar"
                     )
                 )["state_dict"]
             )
@@ -459,7 +459,7 @@ def main(config):
             model.load_state_dict(
                 torch.load(
                     os.path.join(
-                        config.res_dir, "Region_{}".format(fold + 1), "model.pth.tar"
+                        config.res_dir, config.cv_type, "Region_{}".format(fold + 1), "model.pth.tar"
                     )
                 )["state_dict"]
             )
