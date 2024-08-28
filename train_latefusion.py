@@ -1,8 +1,3 @@
-"""
-Main script for semantic experiments
-Author: Vivien Sainte Fare Garnot (github/VSainteuf)
-License: MIT
-"""
 import argparse
 import json
 import os
@@ -19,23 +14,25 @@ import torchnet as tnt
 import wandb
 
 from src import utils, model_utils
-from src.dataset import PASTIS_Dataset
+from src.backbones.latefusion import LateFusionModel
+from src.dataset_extended import PASTIS_Climate_Dataset
 from src.learning.metrics import confusion_matrix_analysis
 from src.learning.miou import IoU
 from src.learning.weight_init import weight_init
 
+
 parser = argparse.ArgumentParser()
-# Model parameters
+
+# model params
 parser.add_argument(
     "--model",
     default="utae",
     type=str,
     help="Type of architecture to use. Can be one of: (utae/unet3d/fpn/convlstm/convgru/uconvlstm/buconvlstm)",
 )
-## U-TAE Hyperparameters
 parser.add_argument("--encoder_widths", default="[64,64,64,128]", type=str)
 parser.add_argument("--decoder_widths", default="[32,32,64,128]", type=str)
-parser.add_argument("--out_conv", default="[32, 20]")
+parser.add_argument("--out_conv", default="[32, 20]", type=str)
 parser.add_argument("--str_conv_k", default=4, type=int)
 parser.add_argument("--str_conv_s", default=2, type=int)
 parser.add_argument("--str_conv_p", default=1, type=int)
@@ -44,82 +41,44 @@ parser.add_argument("--encoder_norm", default="group", type=str)
 parser.add_argument("--n_head", default=16, type=int)
 parser.add_argument("--d_model", default=256, type=int)
 parser.add_argument("--d_k", default=4, type=int)
-parser.add_argument("--encoder", default=False, type=bool)
+parser.add_argument("--encoder", default=True, type=bool)
+
+# LateFusionModel specific parameters
+parser.add_argument("--climate_input_dim", default=11, type=int, help="Number of climate variables")
+parser.add_argument("--fusion_d_model", default=64, type=int, help="Dimension of the model for climate data")
+parser.add_argument("--fusion_nhead", default=4, type=int, help="Number of heads in the transformer")
+parser.add_argument("--fusion_num_layers", default=1, type=int, help="Number of transformer layers")
+parser.add_argument("--fusion_d_ffn", default=128, type=int, help="Dimension of the feedforward network in the transformer")
+parser.add_argument("--apply_noise", default=True, type=bool, help="Apply Gaussian noise to the data as augmentation")
+parser.add_argument("--noise_std", default=0.01, type=float, help="Standard deviation for Gaussian noise")
 
 # Set-up parameters
-parser.add_argument(
-    "--dataset_folder",
-    default="",
-    type=str,
-    help="Path to the folder where the results are saved.",
-)
-parser.add_argument(
-    "--res_dir",
-    default="./results",
-    help="Path to the folder where the results should be stored",
-)
-parser.add_argument(
-    "--num_workers", default=8, type=int, help="Number of data loading workers"
-)
+parser.add_argument("--dataset_folder", default="", type=str, help="Path to the dataset folder")
+parser.add_argument("--climate_folder", default="", type=str, help="Path to the climate dataset folder")
+parser.add_argument("--res_dir", default="./results", help="Path to the folder where the results should be stored")
+parser.add_argument("--num_workers", default=8, type=int, help="Number of data loading workers")
 parser.add_argument("--rdm_seed", default=1, type=int, help="Random seed")
-parser.add_argument(
-    "--device",
-    default="cuda",
-    type=str,
-    help="Name of device to use for tensor computations (cuda/cpu)",
-)
-parser.add_argument(
-    "--display_step",
-    default=50,
-    type=int,
-    help="Interval in batches between display of training metrics",
-)
-parser.add_argument(
-    "--cache",
-    dest="cache",
-    action="store_true",
-    help="If specified, the whole dataset is kept in RAM",
-)
+parser.add_argument("--device", default="cuda", type=str, help="Device for tensor computations (cuda/cpu)")
+parser.add_argument("--display_step", default=50, type=int, help="Interval in batches between display of training metrics")
+parser.add_argument("--cache", dest="cache", action="store_true", help="If specified, the whole dataset is kept in RAM")
+
 # Training parameters
 parser.add_argument("--epochs", default=100, type=int, help="Number of epochs per fold")
 parser.add_argument("--batch_size", default=4, type=int, help="Batch size")
 parser.add_argument("--lr", default=0.001, type=float, help="Learning rate")
 parser.add_argument("--mono_date", default=None, type=str)
 parser.add_argument("--ref_date", default="2018-09-01", type=str)
-parser.add_argument(
-    "--cv_type",
-    default="official",
-    type=str,
-    help="Type of cross-validation to use. Can be one of: 'official', 'regions'.")
-parser.add_argument(
-    "--fold",
-    default=None,
-    type=int,
-    help="Do only one of the five official folds (between 1 and 5) or one of the four region folds (between 1 and 4)",
-)
+parser.add_argument("--cv_type", default="official", type=str, help="Type of cross-validation to use ('official' or 'regions')")
+parser.add_argument("--fold", default=None, type=int, help="Specific fold or region to use")
 parser.add_argument("--num_classes", default=20, type=int)
 parser.add_argument("--ignore_index", default=-1, type=int)
 parser.add_argument("--pad_value", default=0, type=float)
 parser.add_argument("--padding_mode", default="reflect", type=str)
-parser.add_argument(
-    "--val_every",
-    default=1,
-    type=int,
-    help="Interval in epochs between two validation steps.",
-)
-parser.add_argument(
-    "--val_after",
-    default=0,
-    type=int,
-    help="Do validation only after that many epochs.",
-)
+parser.add_argument("--val_every", default=1, type=int, help="Interval in epochs between two validation steps.")
+parser.add_argument("--val_after", default=0, type=int, help="Do validation only after that many epochs.")
 
-parser.add_argument(
-    "--experiment_name",
-    default="default_experiment",
-    type=str,
-    help="Name for the W&B experiment. Use this to distinguish between different runs.",
-)
+# W&B specific parameters
+parser.add_argument("--experiment_name", default="default_experiment", type=str, help="W&B experiment name")
 parser.add_argument("--run_tag", default="", type=str)
 parser.add_argument("--model_tag", default="", type=str)
 parser.add_argument("--config_tag", default="", type=str)
@@ -128,9 +87,7 @@ list_args = ["encoder_widths", "decoder_widths", "out_conv"]
 parser.set_defaults(cache=False)
 
 
-def iterate(
-    model, data_loader, criterion, config, optimizer=None, mode="train", device=None
-):
+def iterate(model, data_loader, criterion, config, optimizer=None, mode="train", device=None):
     loss_meter = tnt.meter.AverageValueMeter()
     iou_meter = IoU(
         num_classes=config.num_classes,
@@ -140,27 +97,32 @@ def iterate(
 
     t_start = time.time()
     for i, batch in enumerate(data_loader):
+        data_dict = batch
         if device is not None:
-            batch = recursive_todevice(batch, device)
-        (x, dates), y = batch
-        y = y.long()
+            data_dict = recursive_todevice(data_dict, device)
+            
+        input_sat, dates_sat = data_dict["input_satellite"]
+        input_clim, dates_clim = data_dict["input_climate"]
+        y = data_dict["target"]
 
         if mode != "train":
             with torch.no_grad():
-                out = model(x, batch_positions=dates)
+                out = model(input_sat, dates_sat, input_clim)
         else:
             optimizer.zero_grad()
-            out = model(x, batch_positions=dates)
-
+            out = model(input_sat, dates_sat, input_clim)
+        
         loss = criterion(out, y)
+        
         if mode == "train":
             loss.backward()
             optimizer.step()
-
+        
         with torch.no_grad():
             pred = out.argmax(dim=1)
         iou_meter.add(pred, y)
         loss_meter.add(loss.item())
+
 
         if (i + 1) % config.display_step == 0:
             miou, acc = iou_meter.get_miou_acc()
@@ -172,41 +134,22 @@ def iterate(
 
     t_end = time.time()
     total_time = t_end - t_start
-    print("Epoch time : {:.1f}s".format(total_time))
+    print(f"Epoch time: {total_time:.1f}s")
     miou, acc = iou_meter.get_miou_acc()
     metrics = {
-        "{}_accuracy".format(mode): acc,
-        "{}_loss".format(mode): loss_meter.value()[0],
-        "{}_IoU".format(mode): miou,
-        "{}_epoch_time".format(mode): total_time,
+        f"{mode}_accuracy": acc,
+        f"{mode}_loss": loss_meter.value()[0],
+        f"{mode}_IoU": miou,
+        f"{mode}_epoch_time": total_time,
     }
 
     wandb.log(metrics)
 
     if mode == "test":
-        return metrics, iou_meter.conf_metric.value()  # confusion matrix
+        return metrics, iou_meter.conf_metric.value()
     else:
         return metrics
-
-
-def recursive_todevice(x, device):
-    if isinstance(x, torch.Tensor):
-        return x.to(device)
-    elif isinstance(x, dict):
-        return {k: recursive_todevice(v, device) for k, v in x.items()}
-    else:
-        return [recursive_todevice(c, device) for c in x]
-
-
-def prepare_output(config, cv_type="official"):
-    os.makedirs(config.res_dir, exist_ok=True)
-    if cv_type=="official":
-        for fold in range(1, 6):
-            os.makedirs(os.path.join(config.res_dir, cv_type, "Fold_{}".format(fold)), exist_ok=True)
-    else:
-        for region in range(1, 5):
-            os.makedirs(os.path.join(config.res_dir, cv_type, "Region_{}".format(region)), exist_ok=True)
-
+    
 def checkpoint(fold, log, config, cv_type="official"):
     if cv_type=="official":
         with open(
@@ -244,6 +187,22 @@ def save_results(fold, metrics, conf_mat, config, cv_type="official"):
             ),
         )
 
+def prepare_output(config, cv_type="official"):
+    os.makedirs(config.res_dir, exist_ok=True)
+    if cv_type=="official":
+        for fold in range(1, 6):
+            os.makedirs(os.path.join(config.res_dir, cv_type, "Fold_{}".format(fold)), exist_ok=True)
+    else:
+        for region in range(1, 5):
+            os.makedirs(os.path.join(config.res_dir, cv_type, "Region_{}".format(region)), exist_ok=True)
+
+def recursive_todevice(x, device):
+    if isinstance(x, torch.Tensor):
+        return x.to(device)
+    elif isinstance(x, dict):
+        return {k: recursive_todevice(v, device) for k, v in x.items()}
+    else:
+        return [recursive_todevice(c, device) for c in x]
 
 def overall_performance(config, cv_type="official"):
     cm = np.zeros((config.num_classes, config.num_classes))
@@ -279,7 +238,7 @@ def overall_performance(config, cv_type="official"):
 
 def main(config):
     experiment_name = config.experiment_name
-    wandb.init(project="utae_default_v_official", config=config, name=experiment_name, 
+    wandb.init(project="utae_default_v_official", config=config, name=experiment_name,
                tags=[config.run_tag, config.model_tag, config.config_tag])
     wandb.config.update(vars(config))
 
@@ -300,11 +259,12 @@ def main(config):
 
     np.random.seed(config.rdm_seed)
     torch.manual_seed(config.rdm_seed)
-    prepare_output(config, cv_type=config.cv_type)
+
     device = torch.device(config.device)
+    prepare_output(config, cv_type=config.cv_type)
 
     # Choose relevant folds (different for official CV-folds vs. CV based on region-folds)
-    if config.cv_type=="official":
+    if config.cv_type == "official":
         fold_sequence = (
             official_fold_sequence if config.fold is None else [official_fold_sequence[config.fold - 1]]
         )
@@ -315,22 +275,26 @@ def main(config):
 
     for fold, (train_folds, val_fold, test_fold) in enumerate(fold_sequence):
         if config.fold is not None:
-            fold = config.fold - 1
-        
-        # Dataset definition
+            fold = config.fold -1 
+
+        # Dataset
         dt_args = dict(
             folder=config.dataset_folder,
+            climate_folder=config.climate_folder,
             norm=True,
             reference_date=config.ref_date,
             mono_date=config.mono_date,
             target="semantic",
             sats=["S2"],
+            apply_noise=config.apply_noise,
+            noise_std=config.noise_std,
         )
-
-        dt_train = PASTIS_Dataset(**dt_args, folds=train_folds, cv_type=config.cv_type, cache=config.cache)
-        dt_val = PASTIS_Dataset(**dt_args, folds=val_fold, cv_type=config.cv_type, cache=config.cache)
-        dt_test = PASTIS_Dataset(**dt_args, folds=test_fold, cv_type=config.cv_type)
-
+        
+        dt_train = PASTIS_Climate_Dataset(**dt_args, folds=train_folds, cv_type=config.cv_type, cache=config.cache)
+        dt_val = PASTIS_Climate_Dataset(**dt_args, folds=val_fold, cv_type=config.cv_type, cache=config.cache)
+        dt_test = PASTIS_Climate_Dataset(**dt_args, folds=test_fold, cv_type=config.cv_type)
+        
+        
         collate_fn = lambda x: utils.pad_collate(x, pad_value=config.pad_value)
         train_loader = data.DataLoader(
             dt_train,
@@ -339,6 +303,7 @@ def main(config):
             drop_last=True,
             collate_fn=collate_fn,
         )
+
         val_loader = data.DataLoader(
             dt_val,
             batch_size=config.batch_size,
@@ -346,6 +311,7 @@ def main(config):
             drop_last=True,
             collate_fn=collate_fn,
         )
+
         test_loader = data.DataLoader(
             dt_test,
             batch_size=config.batch_size,
@@ -353,68 +319,54 @@ def main(config):
             drop_last=True,
             collate_fn=collate_fn,
         )
-
+        
         print(
             "Train {}, Val {}, Test {}".format(len(dt_train), len(dt_val), len(dt_test))
         )
 
-        # Model definition
-        model = model_utils.get_model(config, mode="semantic")
+
+        # get U-TAE model
+        utae_model = model_utils.get_model(config, mode="semantic").to(device)
+
+        # initialize LateFusionModel
+        model = LateFusionModel(
+            utae_model=utae_model,
+            d_model=config.fusion_d_model,
+            nhead=config.fusion_nhead,
+            d_ffn=config.fusion_d_ffn,
+            num_layers=config.fusion_num_layers,
+            num_classes=config.num_classes,
+            out_channels=128,
+            climate_input_dim=config.climate_input_dim
+        ).to(device)
+
         config.N_params = utils.get_ntrainparams(model)
         with open(os.path.join(config.res_dir, config.cv_type, "conf.json"), "w") as file:
             file.write(json.dumps(vars(config), indent=4))
+
         print(model)
         print("TOTAL TRAINABLE PARAMETERS :", config.N_params)
-        print("Trainable layers:")
-        for name, p in model.named_parameters():
-            if p.requires_grad:
-                print(name)
-        model = model.to(device)
+
         model.apply(weight_init)
 
-        # Optimizer and Loss
+        criterion = nn.CrossEntropyLoss(ignore_index=config.ignore_index)
         optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
-
-        weights = torch.ones(config.num_classes, device=device).float()
-        weights[config.ignore_index] = 0
-        criterion = nn.CrossEntropyLoss(weight=weights)
 
         # Training loop
         trainlog = {}
         best_mIoU = 0
         for epoch in range(1, config.epochs + 1):
-            print("EPOCH {}/{}".format(epoch, config.epochs))
+            print(f"EPOCH {epoch}/{config.epochs}")
 
             model.train()
-            train_metrics = iterate(
-                model,
-                data_loader=train_loader,
-                criterion=criterion,
-                config=config,
-                optimizer=optimizer,
-                mode="train",
-                device=device,
-            )
+            train_metrics = iterate(model, train_loader, criterion, config, 
+                                    optimizer, mode="train", device=device)
             if epoch % config.val_every == 0 and epoch > config.val_after:
                 print("Validation . . . ")
                 model.eval()
-                val_metrics = iterate(
-                    model,
-                    data_loader=val_loader,
-                    criterion=criterion,
-                    config=config,
-                    optimizer=optimizer,
-                    mode="val",
-                    device=device,
-                )
+                val_metrics = iterate(model, val_loader, criterion, config, optimizer, mode="val", device=device)
 
-                print(
-                    "Loss {:.4f},  Acc {:.2f},  IoU {:.4f}".format(
-                        val_metrics["val_loss"],
-                        val_metrics["val_accuracy"],
-                        val_metrics["val_IoU"],
-                    )
-                )
+                print(f"Loss {val_metrics['val_loss']:.4f}, Acc {val_metrics['val_accuracy']:.2f}, IoU {val_metrics['val_IoU']:.4f}")
 
                 trainlog[epoch] = {**train_metrics, **val_metrics}
                 checkpoint(fold + 1, trainlog, config, cv_type=config.cv_type)
@@ -442,11 +394,10 @@ def main(config):
                                 config.res_dir, config.cv_type, "Region_{}".format(fold + 1), "model.pth.tar"
                             ),
                         )
-
-            else:
-                trainlog[epoch] = {**train_metrics}
-                checkpoint(fold + 1, trainlog, config, cv_type=config.cv_type)
-
+                else:
+                    trainlog[epoch] = {**train_metrics}
+                    checkpoint(fold + 1, trainlog, config, cv_type=config.cv_type)
+        
         print("Testing best epoch . . .")
         if config.cv_type=='official':
             model.load_state_dict(
@@ -489,7 +440,6 @@ def main(config):
 
     wandb.finish()
 
-
 if __name__ == "__main__":
     config = parser.parse_args()
     for k, v in vars(config).items():
@@ -502,3 +452,4 @@ if __name__ == "__main__":
 
     pprint.pprint(config)
     main(config)
+
