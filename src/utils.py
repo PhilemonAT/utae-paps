@@ -44,13 +44,13 @@ def pad_collate(batch, pad_value=0):
             if np_str_obj_array_pattern.search(elem.dtype.str) is not None:
                 raise TypeError("Format not managed : {}".format(elem.dtype))
 
-            return pad_collate([torch.as_tensor(b) for b in batch])
+            return pad_collate([torch.as_tensor(b) for b in batch], pad_value=pad_value)
         elif elem.shape == ():  # scalars
             return torch.as_tensor(batch)
     elif isinstance(elem, collections.abc.Mapping):
-        return {key: pad_collate([d[key] for d in batch]) for key in elem}
+        return {key: pad_collate([d[key] for d in batch], pad_value=pad_value) for key in elem}
     elif isinstance(elem, tuple) and hasattr(elem, "_fields"):  # namedtuple
-        return elem_type(*(pad_collate(samples) for samples in zip(*batch)))
+        return elem_type(*(pad_collate(samples, pad_value=pad_value) for samples in zip(*batch)))
     elif isinstance(elem, collections.abc.Sequence):
         # check to make sure that the elements in batch have consistent size
         it = iter(batch)
@@ -58,7 +58,7 @@ def pad_collate(batch, pad_value=0):
         if not all(len(elem) == elem_size for elem in it):
             raise RuntimeError("each element in list of batch should be of equal size")
         transposed = zip(*batch)
-        return [pad_collate(samples) for samples in transposed]
+        return [pad_collate(samples, pad_value=pad_value) for samples in transposed]
 
     raise TypeError("Format not managed : {}".format(elem_type))
 

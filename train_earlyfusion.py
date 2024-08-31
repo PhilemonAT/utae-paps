@@ -14,12 +14,11 @@ import torchnet as tnt
 import wandb
 
 from src import utils, model_utils
-from src.backbones.fusion_models import LateFusionModel
 from src.dataset_extended import PASTIS_Climate_Dataset
 from src.learning.metrics import confusion_matrix_analysis
 from src.learning.miou import IoU
 from src.learning.weight_init import weight_init
-
+from src.backbones.fusion_models import ClimateTransformerEncoder
 
 parser = argparse.ArgumentParser()
 
@@ -30,7 +29,7 @@ parser.add_argument(
     type=str,
     help="Type of architecture to use. Can be one of: (utae/unet3d/fpn/convlstm/convgru/uconvlstm/buconvlstm)",
 )
-parser.add_argument("--input_dim", default=10, type=str)
+parser.add_argument("--input_dim", default=21, type=int)
 parser.add_argument("--encoder_widths", default="[64,64,64,128]", type=str)
 parser.add_argument("--decoder_widths", default="[32,32,64,128]", type=str)
 parser.add_argument("--out_conv", default="[32, 20]", type=str)
@@ -42,20 +41,18 @@ parser.add_argument("--encoder_norm", default="group", type=str)
 parser.add_argument("--n_head", default=16, type=int)
 parser.add_argument("--d_model", default=256, type=int)
 parser.add_argument("--d_k", default=4, type=int)
-parser.add_argument("--encoder", default=True, type=bool)
+parser.add_argument("--encoder", default=False, type=bool)
 
-# LateFusionModel specific parameters
+# EarlyFusionModel specific parameters
 parser.add_argument("--climate_input_dim", default=11, type=int, help="Number of climate variables")
-parser.add_argument("--fusion_d_model", default=64, type=int, help="Dimension of the model for climate data")
-parser.add_argument("--fusion_nhead", default=4, type=int, help="Number of heads in the transformer")
-parser.add_argument("--fusion_num_layers", default=1, type=int, help="Number of transformer layers")
-parser.add_argument("--fusion_d_ffn", default=128, type=int, help="Dimension of the feedforward network in the transformer")
 parser.add_argument("--apply_noise", default=True, type=bool, help="Apply Gaussian noise to the data as augmentation")
 parser.add_argument("--noise_std", default=0.01, type=float, help="Standard deviation for Gaussian noise")
+parser.add_argument("--climate_apply_mlp", default=False, type=bool, help="Whether to apply an MLP before concatenating")
 
 # Set-up parameters
 parser.add_argument("--dataset_folder", default="", type=str, help="Path to the dataset folder")
 parser.add_argument("--climate_folder", default="", type=str, help="Path to the climate dataset folder")
+parser.add_argument("--fusion", default=None, type=str, help="Type of fusion to apply. Can be one of: 'early_match_dates', early_weekly")
 parser.add_argument("--res_dir", default="./results", help="Path to the folder where the results should be stored")
 parser.add_argument("--num_workers", default=8, type=int, help="Number of data loading workers")
 parser.add_argument("--rdm_seed", default=1, type=int, help="Random seed")
@@ -98,20 +95,18 @@ def iterate(model, data_loader, criterion, config, optimizer=None, mode="train",
 
     t_start = time.time()
     for i, batch in enumerate(data_loader):
-        data_dict = batch
         if device is not None:
-            data_dict = recursive_todevice(data_dict, device)
-            
-        input_sat, dates_sat = data_dict["input_satellite"]
-        input_clim, dates_clim = data_dict["input_climate"]
-        y = data_dict["target"]
-
+            batch = recursive_todevice(batch, device)
+        
+        (x, dates), y = batch
+        y = y.long()
+        
         if mode != "train":
             with torch.no_grad():
-                out = model(input_sat, dates_sat, input_clim)
+                out = model(x, batch_positions=dates)
         else:
             optimizer.zero_grad()
-            out = model(input_sat, dates_sat, input_clim)
+            out = model(x, batch_positions=dates)
         
         loss = criterion(out, y)
         
@@ -239,7 +234,7 @@ def overall_performance(config, cv_type="official"):
 
 def main(config):
     experiment_name = config.experiment_name
-    wandb.init(project="utae_default_v_official", config=config, name=experiment_name,
+    wandb.init(project="TEST", config=config, name=experiment_name,
                tags=[config.run_tag, config.model_tag, config.config_tag])
     wandb.config.update(vars(config))
 
@@ -278,10 +273,16 @@ def main(config):
         if config.fold is not None:
             fold = config.fold -1 
 
+        if config.fusion == "early_weekly":
+            climate_transformer_encoder = ClimateTransformerEncoder(d_model=24).to(device)
+        else:
+            climate_transformer_encoder = None
+
         # Dataset
         dt_args = dict(
-            folder=config.dataset_folder,
+            folder=config.dataset_folder, 
             climate_folder=config.climate_folder,
+            fusion=config.fusion,
             norm=True,
             reference_date=config.ref_date,
             mono_date=config.mono_date,
@@ -289,13 +290,14 @@ def main(config):
             sats=["S2"],
             apply_noise=config.apply_noise,
             noise_std=config.noise_std,
+            climate_apply_mlp=config.climate_apply_mlp,
+            climate_transformer_encoder=climate_transformer_encoder
         )
         
         dt_train = PASTIS_Climate_Dataset(**dt_args, folds=train_folds, cv_type=config.cv_type, cache=config.cache)
         dt_val = PASTIS_Climate_Dataset(**dt_args, folds=val_fold, cv_type=config.cv_type, cache=config.cache)
         dt_test = PASTIS_Climate_Dataset(**dt_args, folds=test_fold, cv_type=config.cv_type)
-        
-        
+                
         collate_fn = lambda x: utils.pad_collate(x, pad_value=config.pad_value)
         train_loader = data.DataLoader(
             dt_train,
@@ -327,19 +329,7 @@ def main(config):
 
 
         # get U-TAE model
-        utae_model = model_utils.get_model(config, mode="semantic").to(device)
-
-        # initialize LateFusionModel
-        model = LateFusionModel(
-            utae_model=utae_model,
-            d_model=config.fusion_d_model,
-            nhead=config.fusion_nhead,
-            d_ffn=config.fusion_d_ffn,
-            num_layers=config.fusion_num_layers,
-            num_classes=config.num_classes,
-            out_channels=128,
-            climate_input_dim=config.climate_input_dim
-        ).to(device)
+        model = model_utils.get_model(config, mode="semantic").to(device)
 
         config.N_params = utils.get_ntrainparams(model)
         with open(os.path.join(config.res_dir, config.cv_type, "conf.json"), "w") as file:
@@ -435,11 +425,11 @@ def main(config):
             )
         )
         save_results(fold + 1, test_metrics, conf_mat.cpu().numpy(), config, cv_type=config.cv_type)
-
     if config.fold is None:
         overall_performance(config, cv_type=config.cv_type)
 
     wandb.finish()
+
 
 if __name__ == "__main__":
     config = parser.parse_args()
@@ -447,8 +437,8 @@ if __name__ == "__main__":
         if k in list_args and v is not None:
             v = v.replace("[", "")
             v = v.replace("]", "")
-            config.__setattr__(k, list(map(int, v.split(","))))
-
+            config.__setattr__(k, list(map(int, v.split(","))))    
+    
     assert config.num_classes == config.out_conv[-1]
 
     pprint.pprint(config)

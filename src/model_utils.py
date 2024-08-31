@@ -6,7 +6,7 @@ def get_model(config, mode="semantic"):
     if mode == "semantic":
         if config.model == "utae":
             model = utae.UTAE(
-                input_dim=10,
+                input_dim=config.input_dim,
                 encoder_widths=config.encoder_widths,
                 decoder_widths=config.decoder_widths,
                 out_conv=config.out_conv,

@@ -1,6 +1,7 @@
 import os
 import json
 import torch
+import torch.nn as nn
 import torch.utils.data as tdata
 import numpy as np
 import pandas as pd
@@ -14,6 +15,7 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
         climate_folder,
         norm=True,
         target="semantic",
+        fusion=None,
         cache=False,
         mem16=False,
         cv_type="official",
@@ -24,6 +26,10 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
         sats=["S2"],
         apply_noise=True,
         noise_std=0.01,
+        climate_input_dim=11,
+        climate_apply_mlp=False,
+        mlp_hidden_dim=64,
+        climate_transformer_encoder=None
     ):
         super(PASTIS_Climate_Dataset, self).__init__()
         self.folder = folder
@@ -41,9 +47,23 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
             else class_mapping
         )
         self.target = target
+        self.fusion = fusion
         self.sats = sats
         self.apply_noise = apply_noise
         self.noise_std = noise_std
+        self.climate_apply_mlp = climate_apply_mlp
+
+        if self.fusion == "early_match_dates":
+            if climate_apply_mlp:
+                print("Applying MLP to climate data")
+                self.climate_mlp = ClimateMLP(input_dim=climate_input_dim, 
+                                            output_dim=climate_input_dim, 
+                                            hidden_dim=mlp_hidden_dim).to('cuda' if torch.cuda.is_available() else 'cpu')
+        elif self.fusion == "early_weekly":
+            if climate_transformer_encoder is not None:
+                self.climate_transformer_encoder = climate_transformer_encoder
+            else:
+                raise ValueError("When using 'early_weekly' as fusion strategy, must specify climate_transformer_encoder.")
 
         # Get metadata
         print("Reading patch metadata . . .")
@@ -159,6 +179,38 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
     def get_dates(self, id_patch, sat):
         return self.date_range[np.where(self.date_tables[sat][id_patch] == 1)[0]]
 
+    def get_intervals_climate_data(self, dates_sat, climate_data):
+        interval_climate_data = []
+
+        # iterate over pairs of consecutive observation dates
+        for i, current_date in enumerate(dates_sat):
+            if i == 0:
+                # for the first observation, use up to 7 days before the first date
+                start_date = max(current_date - 7, 0)
+            else:
+                # use the interval between the previous and current observation date
+                previous_date = dates_sat[i - 1]
+                start_date = max(current_date - 7, previous_date)
+
+            # extract climate data from start_date to current_date
+            interval_data = climate_data[start_date:current_date]
+            interval_climate_data.append(interval_data)
+
+        return interval_climate_data
+
+    def encode_climate_data(self, interval_climate_data):
+        # convert interval data to tensors and handle padding
+        sequences = [data.clone().detach().to('cuda' if torch.cuda.is_available() else 'cpu') 
+                    if isinstance(data, torch.Tensor) 
+                    else torch.tensor(data, dtype=torch.float32).to('cuda' if torch.cuda.is_available() else 'cpu')
+                    for data in interval_climate_data]
+        
+        padded_sequences = torch.nn.utils.rnn.pad_sequence(sequences, batch_first=True)
+        
+        # create embedding using the climate transformer encoder module
+        climate_embedding = self.climate_transformer_encoder(padded_sequences)  # Output: (T x d_model)
+        return climate_embedding.to('cpu')
+
     def __getitem__(self, item):
         id_patch = self.id_patches[item]
 
@@ -249,9 +301,68 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
 
         if self.apply_noise:
             climate_data += torch.normal(0, self.noise_std, size=climate_data.shape)
+        
+        if self.fusion is not None:
+            sat_data, sat_dates = data, dates
             
+            if self.fusion == "early_match_dates":
+                if self.climate_apply_mlp:
+                    climate_data = climate_data.to('cuda' if torch.cuda.is_available() else 'cpu')
+                    climate_data = self.climate_mlp(climate_data)
+
+                matched_data = []
+                for t, date in enumerate(sat_dates):
+                    sat_data_t = sat_data[t]       # (C x H x W) 
+                    
+                    clim_idx = torch.where(climate_dates == date)[0]
+
+                    if len(clim_idx) > 0:
+                        clim_vec = climate_data[clim_idx[0]] # (V)
+                    else:
+                        clim_vec = torch.zeros(climate_data.size(1)) # (V)
+                    
+                    clim_vec_expanded = clim_vec.unsqueeze(1).unsqueeze(2).expand(-1, 
+                                                                                  sat_data.size(2), 
+                                                                                  sat_data.size(3)) # (V x H x W)
+                    # concatenate along channel dimension 
+                    combined = torch.cat((sat_data_t, clim_vec_expanded), dim=0) # ((C+V) x H x W)
+                    matched_data.append(combined)
+
+                matched_data = torch.stack(matched_data, dim=0)  # (T x (C+V) x H x W)
+
+                return (matched_data, sat_dates), target
+            
+            elif self.fusion == "early_weekly":
+                # extract climate data intervals between satellite observation dates
+                interval_climate_data = self.get_intervals_climate_data(sat_dates, climate_data)
+                
+                # encode climate data
+                climate_embedding = self.encode_climate_data(interval_climate_data) # (T x d_model)
+
+                # Fusion Step
+                # expand climate embedding to match spatial dim. of satellite data
+                climate_embedding = climate_embedding.unsqueeze(-1).unsqueeze(-1) # (T x d_model x 1 x 1)
+                climate_embedding = climate_embedding.expand(-1, -1,
+                                                             sat_data.size(2),
+                                                             sat_data.size(3)) # (T x d_model x H x W)
+                combined = torch.cat((sat_data, climate_embedding), dim=1) # (T x (C + d_model) x H x W)
+
+                return (combined, sat_dates), target
+
         return {
             "input_satellite": (data, dates),
             "input_climate": (climate_data, climate_dates),
             "target": target
         }
+
+class ClimateMLP(nn.Module):
+    def __init__(self, input_dim, output_dim, hidden_dim=64):
+        super(ClimateMLP, self).__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, output_dim)
+        )
+
+    def forward(self, x):
+        return self.mlp(x)
