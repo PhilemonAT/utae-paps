@@ -59,11 +59,11 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
                 self.climate_mlp = ClimateMLP(input_dim=climate_input_dim, 
                                             output_dim=climate_input_dim, 
                                             hidden_dim=mlp_hidden_dim).to('cuda' if torch.cuda.is_available() else 'cpu')
-        elif self.fusion == "early_weekly":
+        elif self.fusion in ["early_weekly", "mid"]:
             if climate_transformer_encoder is not None:
                 self.climate_transformer_encoder = climate_transformer_encoder
             else:
-                raise ValueError("When using 'early_weekly' as fusion strategy, must specify climate_transformer_encoder.")
+                raise ValueError("When using 'early_weekly' or 'mid' as fusion strategy, must specify climate_transformer_encoder.")
 
         # Get metadata
         print("Reading patch metadata . . .")
@@ -211,6 +211,25 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
         climate_embedding = self.climate_transformer_encoder(padded_sequences)  # Output: (T x d_model)
         return climate_embedding.to('cpu')
 
+    def create_causal_mask(self, dates_sat, climate_dates):
+        """
+        Create a causal mask to align climate dates with satellite observation dates.
+        
+        Args:
+            dates_sat (torch.Tensor): Tensor of satellite observation dates (size: [T_sat])
+            climate_dates (torch.Tensor): Tensor of climate dates (size: [T_clim])
+            
+        Returns:
+            torch.Tensor: Causal mask (size: [T_sat, T_clim])
+        """
+        dates_sat_exp = dates_sat.unsqueeze(1) # (T_sat, 1)
+        climate_dates_exp = climate_dates.unsqueeze(0) # (1, T_clim)
+        causal_mask = (climate_dates_exp < dates_sat_exp) # (T_sat, T_clim)
+       
+        return causal_mask
+
+
+
     def __getitem__(self, item):
         id_patch = self.id_patches[item]
 
@@ -348,6 +367,33 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
                 combined = torch.cat((sat_data, climate_embedding), dim=1) # (T x (C + d_model) x H x W)
 
                 return (combined, sat_dates), target
+            
+            elif self.fusion == "mid":
+                causal_mask = self.create_causal_mask(sat_dates, climate_dates) # (T_sat x T_clim)
+
+                combined_features = []
+                for t, _ in enumerate(sat_dates):
+
+                    relevant_clim_data = climate_data[causal_mask[t]] # (N_clim_t x climate_input_dim) where N_clim_t is the number of relevant climate data points
+
+                    if relevant_clim_data.size(0) > 0:
+                        relevant_clim_data = relevant_clim_data.unsqueeze(0) # add batch dim.
+                        clim_embedding = self.climate_transformer_encoder(relevant_clim_data.to(
+                            'cuda' if torch.cuda.is_available() else 'cpu'
+                            )
+                        ) # (B x d_model) --> CLS token
+                    else:
+                        clim_embedding = torch.zeros((self.climate_transformer_encoder.climate_projection.out_features), 
+                                                     device = sat_data.device)
+                    
+                    clim_embedding = clim_embedding.squeeze(0).unsqueeze(-1).unsqueeze(-1).expand(-1, sat_data.size(2), sat_data.size(3))
+                    combined = torch.cat((sat_data[t], clim_embedding.to('cpu')), dim=0) # ((C + d_model) x H x W)
+                    combined_features.append(combined)
+
+                combined_features = torch.stack(combined_features, dim=0) # (T x (C + d_model) x H x W)
+                combined_features = combined_features
+
+                return (combined_features, sat_dates), target
 
         return {
             "input_satellite": (data, dates),
