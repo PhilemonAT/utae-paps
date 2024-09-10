@@ -47,7 +47,6 @@ parser.add_argument("--encoder", default=False, type=bool)
 parser.add_argument("--climate_input_dim", default=11, type=int, help="Number of climate variables")
 parser.add_argument("--apply_noise", default=True, type=bool, help="Apply Gaussian noise to the data as augmentation")
 parser.add_argument("--noise_std", default=0.01, type=float, help="Standard deviation for Gaussian noise")
-parser.add_argument("--climate_apply_mlp", default=False, type=bool, help="Whether to apply an MLP before concatenating")
 
 # Set-up parameters
 parser.add_argument("--dataset_folder", default="", type=str, help="Path to the dataset folder")
@@ -275,16 +274,10 @@ def main(config):
         if config.fold is not None:
             fold = config.fold -1 
 
-        # if config.fusion == "early_weekly":
-        #     climate_transformer_encoder = ClimateTransformerEncoder(d_model=24).to(device)
-        # else:
-        #     climate_transformer_encoder = None
-
         # Dataset
         dt_args = dict(
             folder=config.dataset_folder, 
             climate_folder=config.climate_folder,
-            fusion=None, # @TODO: Won't be needed as parameter anymore! Adjust dataset class
             norm=True,
             reference_date=config.ref_date,
             mono_date=config.mono_date,

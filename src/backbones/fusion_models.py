@@ -8,12 +8,15 @@ class ClimateTransformerEncoder(nn.Module):
                  d_model=64,
                  nhead=4,
                  d_ffn=128,
-                 num_layers=1):
+                 num_layers=1,
+                 use_cls_token=True):
         super(ClimateTransformerEncoder, self).__init__()
         
         self.climate_projection = nn.Linear(climate_input_dim, d_model)
-        
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
+        self.use_cls_token = use_cls_token
+
+        if use_cls_token:
+            self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
 
         transformer_layer = TransformerEncoderLayer(
             d_model=d_model,
@@ -27,16 +30,27 @@ class ClimateTransformerEncoder(nn.Module):
             num_layers=num_layers
         )
     
-    def forward(self, climate_data):
+    def forward(self, climate_data, mask=None, is_causal=False):
         climate_data = self.climate_projection(climate_data) # (B x T' x d_model)
         batch_size = climate_data.size(0)
-        cls_token = self.cls_token.expand(batch_size, -1, -1)
-        
-        climate_data = torch.cat((cls_token, climate_data), dim=1)
-        climate_embedding = self.climate_transformer(climate_data)
-        cls_embedding = climate_embedding[:, 0, :] # (B x d_model)
 
-        return cls_embedding
+        if self.use_cls_token:
+            cls_token = self.cls_token.expand(batch_size, -1, -1)
+            climate_data = torch.cat((cls_token, climate_data), dim=1)
+
+        # Apply transformer encoder
+        if mask is not None:
+            climate_embedding = self.climate_transformer(climate_data, mask=mask, is_causal=True)
+        else:
+            climate_embedding = self.climate_transformer(climate_data)
+
+        if self.use_cls_token:
+            cls_embedding = climate_embedding[:, 0, :] # (B x d_model)
+            # output cls token embedding only (no temporal dimension)
+            return cls_embedding
+        else:
+            # output full sequence embedding
+            return climate_embedding # (B x T' x d_model)
 
 
 class LateFusionModel(nn.Module):
@@ -60,7 +74,8 @@ class LateFusionModel(nn.Module):
             d_model=d_model, 
             nhead=nhead, 
             d_ffn=d_ffn, 
-            num_layers=num_layers
+            num_layers=num_layers,
+            use_cls_token=True
         )
 
         self.final_conv = nn.Sequential(
@@ -110,19 +125,33 @@ class EarlyFusionModel(nn.Module):
                  climate_input_dim=11,
                  d_model=64,
                  fusion_strategy='match_dates',
+                 use_climate_mlp=False,
                  mlp_hidden_dim=64,
                  pad_value=-1000):
         super(EarlyFusionModel, self).__init__()
 
         self.utae_model = utae_model 
         self.fusion_strategy = fusion_strategy
+        self.use_climate_mlp = use_climate_mlp
         self.pad_value = pad_value
 
-        self.climate_mlp = nn.Sequential(
-            nn.Linear(climate_input_dim, mlp_hidden_dim),
-            nn.ReLU(),
-            nn.Linear(mlp_hidden_dim, d_model)
-        )
+        if use_climate_mlp:
+            self.climate_mlp = nn.Sequential(
+                nn.Linear(climate_input_dim, mlp_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(mlp_hidden_dim, d_model)
+            )
+
+        if fusion_strategy == 'causal':
+            self.causal_transformer_encoder = ClimateTransformerEncoder(
+                climate_input_dim=climate_input_dim,
+                d_model=d_model,
+                nhead=4,
+                d_ffn=128,
+                num_layers=1,
+                use_cls_token=False # not using CLS token; need per time step embeddings
+            )
+
 
     def fuse_climate_data(self, sat_data, sat_dates, climate_data, climate_dates):
         fused_data = []
@@ -152,6 +181,17 @@ class EarlyFusionModel(nn.Module):
                         clim_vec = batch_climate_data[clim_indices].mean(dim=0)
                     else:
                         clim_vec = torch.full((batch_climate_data.size(1),), float(self.pad_value), device=sat_data.device)
+                elif self.fusion_strategy == 'causal':
+                    causal_mask = (batch_climate_dates.unsqueeze(0) < sat_date).unsqueeze(0) # (1 x 1 x T_clim)
+
+                    climate_embedding = self.causal_transformer_encoder(
+                        batch_climate_data.unsqueeze(0), mask=causal_mask, is_causal=True
+                    )[0] # (T_clim x d_model)
+
+                    # use embedding corresponding to current time step
+                    clim_vec = climate_embedding[t] # vector of size (d_model)
+                    print("Size of clim_vec when using causal transformer: ", clim_vec.size())
+                
                 else:
                     raise ValueError(f"Unknown fusion strategy: {self.fusion_strategy}")
             
@@ -163,9 +203,11 @@ class EarlyFusionModel(nn.Module):
                 batch_fused.append(combined)
 
             batch_fused = torch.stack(batch_fused, dim=0) # (T x (C + d_model) x H x W)
+            print("Size of batch_fused: ", batch_fused.size())
             fused_data.append(batch_fused)
         
         fused_data = torch.stack(fused_data, dim=0) # (B x T x (C + d_model) x H x W)
+        print("Size of final fused_data: ", fused_data.size())
         return fused_data
 
     def forward(self, input_sat, dates_sat, input_clim, dates_clim):
