@@ -102,3 +102,76 @@ class LateFusionModel(nn.Module):
         output = self.final_conv(combined_features)
 
         return output
+
+
+class EarlyFusionModel(nn.Module):
+    def __init__(self,
+                 utae_model,
+                 climate_input_dim=11,
+                 d_model=64,
+                 fusion_strategy='match_dates',
+                 mlp_hidden_dim=64,
+                 pad_value=-1000):
+        super(EarlyFusionModel, self).__init__()
+
+        self.utae_model = utae_model 
+        self.fusion_strategy = fusion_strategy
+        self.pad_value = pad_value
+
+        self.climate_mlp = nn.Sequential(
+            nn.Linear(climate_input_dim, mlp_hidden_dim),
+            nn.ReLU(),
+            nn.Linear(mlp_hidden_dim, d_model)
+        )
+
+    def fuse_climate_data(self, sat_data, sat_dates, climate_data, climate_dates):
+        fused_data = []
+
+        for b in range(sat_data.size(0)): # Loop over the batch
+            batch_sat_data = sat_data[b]
+            batch_sat_dates = sat_dates[b]
+            batch_climate_data = climate_data[b]
+            batch_climate_dates = climate_dates[b]
+
+            batch_fused = []
+
+            for t, sat_date in enumerate(batch_sat_dates):
+
+                if self.fusion_strategy == 'match_dates':
+                    climate_indices = (batch_climate_dates == sat_date).nonzero(as_tuple=True)[0]
+                    if len(climate_indices) > 0:
+                        clim_vec = batch_climate_data[climate_indices[0]]
+                    else:
+                        # fill with pad value used for satellite data (-1000)
+                        clim_vec = torch.full((batch_climate_data.size(1),), float(self.pad_value), device=sat_data.device)
+                
+                elif self.fusion_strategy == 'weekly':
+                    clim_indices = (batch_climate_dates < sat_date) & (batch_climate_dates >= (sat_date - 7))
+                    
+                    if clim_indices.any():
+                        clim_vec = batch_climate_data[clim_indices].mean(dim=0)
+                    else:
+                        clim_vec = torch.full((batch_climate_data.size(1),), float(self.pad_value), device=sat_data.device)
+                else:
+                    raise ValueError(f"Unknown fusion strategy: {self.fusion_strategy}")
+            
+                if hasattr(self, 'climate_mlp'):
+                    clim_vec = self.climate_mlp(clim_vec)
+                
+                clim_vec_expanded = clim_vec.unsqueeze(-1).unsqueeze(-1).expand(-1, batch_sat_data.size(2), batch_sat_data.size(3))
+                combined = torch.cat((batch_sat_data[t], clim_vec_expanded), dim=0) # ((C + d_model) x H x W)
+                batch_fused.append(combined)
+
+            batch_fused = torch.stack(batch_fused, dim=0) # (T x (C + d_model) x H x W)
+            fused_data.append(batch_fused)
+        
+        fused_data = torch.stack(fused_data, dim=0) # (B x T x (C + d_model) x H x W)
+        return fused_data
+
+    def forward(self, input_sat, dates_sat, input_clim, dates_clim):
+        
+        fused_data = self.fuse_climate_data(input_sat, dates_sat, input_clim, dates_clim)
+
+        output = self.utae_model(fused_data, batch_positions=dates_sat)
+
+        return output

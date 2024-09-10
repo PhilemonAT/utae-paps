@@ -18,7 +18,7 @@ from src.dataset_extended import PASTIS_Climate_Dataset
 from src.learning.metrics import confusion_matrix_analysis
 from src.learning.miou import IoU
 from src.learning.weight_init import weight_init
-from src.backbones.fusion_models import ClimateTransformerEncoder
+from src.backbones.fusion_models import EarlyFusionModel
 
 parser = argparse.ArgumentParser()
 
@@ -52,7 +52,7 @@ parser.add_argument("--climate_apply_mlp", default=False, type=bool, help="Wheth
 # Set-up parameters
 parser.add_argument("--dataset_folder", default="", type=str, help="Path to the dataset folder")
 parser.add_argument("--climate_folder", default="", type=str, help="Path to the climate dataset folder")
-parser.add_argument("--fusion", default=None, type=str, help="Type of fusion to apply. Can be one of: 'early_match_dates', early_weekly")
+parser.add_argument("--fusion_strategy", default=None, type=str, help="Type of fusion to apply. Can be one of: 'match_dates', 'weekly'")
 parser.add_argument("--res_dir", default="./results", help="Path to the folder where the results should be stored")
 parser.add_argument("--num_workers", default=8, type=int, help="Number of data loading workers")
 parser.add_argument("--rdm_seed", default=1, type=int, help="Random seed")
@@ -95,18 +95,20 @@ def iterate(model, data_loader, criterion, config, optimizer=None, mode="train",
 
     t_start = time.time()
     for i, batch in enumerate(data_loader):
+        data_dict = batch
         if device is not None:
-            batch = recursive_todevice(batch, device)
-        
-        (x, dates), y = batch
-        y = y.long()
-        
+            data_dict = recursive_todevice(data_dict, device)
+            
+        input_sat, dates_sat = data_dict["input_satellite"]
+        input_clim, dates_clim = data_dict["input_climate"]
+        y = data_dict["target"]
+
         if mode != "train":
             with torch.no_grad():
-                out = model(x, batch_positions=dates)
+                out = model(input_sat, dates_sat, input_clim, dates_clim)
         else:
             optimizer.zero_grad()
-            out = model(x, batch_positions=dates)
+            out = model(input_sat, dates_sat, input_clim, dates_clim)
         
         loss = criterion(out, y)
         
@@ -234,7 +236,7 @@ def overall_performance(config, cv_type="official"):
 
 def main(config):
     experiment_name = config.experiment_name
-    wandb.init(project="TEST", config=config, name=experiment_name,
+    wandb.init(project="utae_default_v_official", config=config, name=experiment_name,
                tags=[config.run_tag, config.model_tag, config.config_tag])
     wandb.config.update(vars(config))
 
@@ -273,25 +275,23 @@ def main(config):
         if config.fold is not None:
             fold = config.fold -1 
 
-        if config.fusion == "early_weekly":
-            climate_transformer_encoder = ClimateTransformerEncoder(d_model=24).to(device)
-        else:
-            climate_transformer_encoder = None
+        # if config.fusion == "early_weekly":
+        #     climate_transformer_encoder = ClimateTransformerEncoder(d_model=24).to(device)
+        # else:
+        #     climate_transformer_encoder = None
 
         # Dataset
         dt_args = dict(
             folder=config.dataset_folder, 
             climate_folder=config.climate_folder,
-            fusion=config.fusion,
+            fusion=None, # @TODO: Won't be needed as parameter anymore! Adjust dataset class
             norm=True,
             reference_date=config.ref_date,
             mono_date=config.mono_date,
             target="semantic",
             sats=["S2"],
             apply_noise=config.apply_noise,
-            noise_std=config.noise_std,
-            climate_apply_mlp=config.climate_apply_mlp,
-            climate_transformer_encoder=climate_transformer_encoder
+            noise_std=config.noise_std    
         )
         
         dt_train = PASTIS_Climate_Dataset(**dt_args, folds=train_folds, cv_type=config.cv_type, cache=config.cache)
@@ -329,7 +329,9 @@ def main(config):
 
 
         # get U-TAE model
-        model = model_utils.get_model(config, mode="semantic").to(device)
+        utae_model = model_utils.get_model(config, mode="semantic").to(device)
+        model = EarlyFusionModel(utae_model=utae_model, fusion_strategy=config.fusion_strategy,
+                                 pad_value=config.pad_value).to('cuda')
 
         config.N_params = utils.get_ntrainparams(model)
         with open(os.path.join(config.res_dir, config.cv_type, "conf.json"), "w") as file:
