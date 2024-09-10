@@ -47,11 +47,13 @@ parser.add_argument("--encoder", default=False, type=bool)
 parser.add_argument("--climate_input_dim", default=11, type=int, help="Number of climate variables")
 parser.add_argument("--apply_noise", default=True, type=bool, help="Apply Gaussian noise to the data as augmentation")
 parser.add_argument("--noise_std", default=0.01, type=float, help="Standard deviation for Gaussian noise")
+parser.add_argument("--fusion_strategy", default=None, type=str, help="Type of fusion to apply. Can be one of: 'match_dates', 'weekly', 'causal'")
+parser.add_argument("--use_climate_mlp", default=False, type=bool, help="Whether to process the climate data with a small MLP before fusion")
+parser.add_argument("--use_film", default=False, type=bool, help="Whether to use Feature-wise Linear Modulation (FiLM) for 1D-2D fusion")
 
 # Set-up parameters
 parser.add_argument("--dataset_folder", default="", type=str, help="Path to the dataset folder")
 parser.add_argument("--climate_folder", default="", type=str, help="Path to the climate dataset folder")
-parser.add_argument("--fusion_strategy", default=None, type=str, help="Type of fusion to apply. Can be one of: 'match_dates', 'weekly'")
 parser.add_argument("--res_dir", default="./results", help="Path to the folder where the results should be stored")
 parser.add_argument("--num_workers", default=8, type=int, help="Number of data loading workers")
 parser.add_argument("--rdm_seed", default=1, type=int, help="Random seed")
@@ -235,7 +237,7 @@ def overall_performance(config, cv_type="official"):
 
 def main(config):
     experiment_name = config.experiment_name
-    wandb.init(project="utae_default_v_official", config=config, name=experiment_name,
+    wandb.init(project="TEST", config=config, name=experiment_name,
                tags=[config.run_tag, config.model_tag, config.config_tag])
     wandb.config.update(vars(config))
 
@@ -324,7 +326,8 @@ def main(config):
         # get U-TAE model
         utae_model = model_utils.get_model(config, mode="semantic").to(device)
         model = EarlyFusionModel(utae_model=utae_model, fusion_strategy=config.fusion_strategy,
-                                 pad_value=config.pad_value).to('cuda')
+                                 use_climate_mlp=config.use_climate_mlp, pad_value=config.pad_value,
+                                 use_film=config.use_film).to('cuda')
 
         config.N_params = utils.get_ntrainparams(model)
         with open(os.path.join(config.res_dir, config.cv_type, "conf.json"), "w") as file:
