@@ -40,34 +40,35 @@ class ClimateTransformerEncoder(nn.Module):
             num_layers=num_layers
         )
     
-    def forward(self, climate_data, mask=None):
+    def forward(self, climate_data, mask=None, is_causal=False):
         """
         Args:
             climate_data (Tensor): Input climate data of shape (B x T' x climate_input_dim).
             mask (Tensor, optional): Mask to be applied in the transformer encoder.
+            is_causal (bool, optional): If True, applies a causal mask.
 
         Returns:
             Tensor: The output embedding of shape (B x d_model) if using CLS token, otherwise (B x T' x d_model).
         """
         climate_data = self.climate_projection(climate_data) # (B x T' x d_model)
-        batch_size, seq_len, _ = climate_data.size() 
+        batch_size = climate_data.size(0)
 
         if self.use_cls_token:
             cls_token = self.cls_token.expand(batch_size, -1, -1)
-            climate_data = torch.cat((cls_token, climate_data), dim=1) # (B x (T'+1) x d_model)
-            seq_len += 1
+            climate_data = torch.cat((cls_token, climate_data), dim=1)
 
         # Apply transformer encoder
         if mask is not None:
-            climate_embedding = self.climate_transformer(climate_data, mask=mask)
+            climate_embedding = self.climate_transformer(climate_data, mask=mask, is_causal=True)
         else:
             climate_embedding = self.climate_transformer(climate_data)
 
-        # Return CLS token embedding if used, otherwise return full sequence embedding
         if self.use_cls_token:
             cls_embedding = climate_embedding[:, 0, :] # (B x d_model)
+            # output cls token embedding only (no temporal dimension)
             return cls_embedding
         else:
+            # output full sequence embedding
             return climate_embedding # (B x T' x d_model)
 
 class LateFusionModel(nn.Module):
@@ -253,54 +254,6 @@ class EarlyFusionModel(nn.Module):
         Returns:
             Tensor: Fused data of shape (B x T x (C + d_model) x H x W) or (B x T x C x H x W) if FiLM is applied.
         """
-
-        batch_size, num_sat_timesteps, _, height, width = sat_data.size()
-
-        if self.fusion_strategy == 'causal':
-            # Create causal mask for the entire sequence
-            causal_mask = torch.triu(torch.ones((climate_dates.size(1), climate_dates.size(1)),
-                                                device=climate_data.device), diagonal=1).bool()
-            
-            # expand mask for batch and heads
-            num_heads = self.causal_transformer_encoder.climate_transformer.layers[0].self_attn.num_heads
-            causal_mask = causal_mask.unsqueeze(0).expand(batch_size, -1, -1) # (B x T' x T')
-            causal_mask = causal_mask.unsqueeze(1).expand(-1, num_heads, -1, -1) # (B x Heads x T' x T')
-            causal_mask = causal_mask.reshape(batch_size * num_heads, climate_dates.size(1), climate_dates.size(1)) # (B*H, T', T')
-            
-            # compute climate embeddings for the entire sequence
-            climate_embeddings = self.causal_transformer_encoder(climate_data, mask=causal_mask) # (B x T' x d_model)
-
-            fused_data = []
-
-            for b in range(batch_size):
-                batch_fused = []
-                for t in range(num_sat_timesteps):
-                    sat_date = sat_dates[b, t].item()
-
-                    if sat_date != self.pad_value:
-                        # Find the closest valid climate embedding before or at each satellite observation date
-                        closest_climate_idx = (climate_dates[b] <= sat_dates[b, t].item()).nonzero(as_tuple=True)[0].max()
-                        clim_vec = climate_embeddings[b, closest_climate_idx]  # (d_model,)
-                    else:
-                        # sat_date corresponds to a padded entry --> fill with pad_value
-                        clim_vec = torch.full((climate_embeddings.size(-1),), float(self.pad_value), device=climate_data.device) 
-                    
-                    if not self.use_film:
-                        # Expand and combine with satellite features
-                        clim_vec_expanded = clim_vec.unsqueeze(-1).unsqueeze(-1).expand(-1, height, width) # (d_model x H x W)
-                        combined = torch.cat((sat_data[b, t], clim_vec_expanded), dim=0) # ((C + d_model) x H x W)
-                    else:
-                        pad_mask_t = (sat_data[b, t] == self.pad_value).all(dim=-1).all(dim=-1).all(dim=-1)
-                        combined = self.FiLM(sat_data[b, t], clim_vec, pad_mask_t) # (C x H x W)
-
-                    batch_fused.append(combined)
-                fused_data.append(torch.stack(batch_fused, dim=0)) # (T x (C + d_model) x H x W) or (T x C x H x W) if FiLM applied
-            
-            fused_data = torch.stack(fused_data, dim=0) # (B x T x (C + d_model) x H x W) or (B x T x C x H x W) if FiLM applied
-
-            return fused_data
-
-        # other fusion strategies ('match_dates' or 'weekly')
         fused_data = []
 
         for b in range(sat_data.size(0)): # Loop over the batch
@@ -327,6 +280,28 @@ class EarlyFusionModel(nn.Module):
                     if clim_indices.any():
                         clim_vec = batch_climate_data[clim_indices].mean(dim=0)
                     else:
+                        clim_vec = torch.full((batch_climate_data.size(1),), float(self.pad_value), device=sat_data.device)
+
+                elif self.fusion_strategy == 'causal':
+                    causal_mask = (batch_climate_dates.unsqueeze(0) < sat_date).unsqueeze(0) # (1 x 1 x T_clim)
+                    
+                    num_heads = self.causal_transformer_encoder.climate_transformer.layers[0].self_attn.num_heads 
+
+                    # Expand mask to match batch * n_head and sequence dimensions correctly
+                    causal_mask = causal_mask.expand(1 * num_heads, 
+                                                     batch_climate_data.size(0), 
+                                                     batch_climate_data.size(0))  # (B*n_heads, T_clim, T_clim)
+                    
+                    climate_embedding = self.causal_transformer_encoder(
+                        batch_climate_data.unsqueeze(0), mask=causal_mask, is_causal=True
+                    )[0] # (T_clim x d_model)
+
+                    # use embedding corresponding to current time step
+                    if sat_date != self.pad_value:
+                        # if the current time step does not correspond to a padded entry
+                        clim_vec = climate_embedding[t] # vector of size (d_model)
+                    else:
+                        # the current time step corresponds to a padded entry --> use padded clim_vec
                         clim_vec = torch.full((batch_climate_data.size(1),), float(self.pad_value), device=sat_data.device)
 
                 else:

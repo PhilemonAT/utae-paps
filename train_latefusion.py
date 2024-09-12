@@ -52,6 +52,7 @@ parser.add_argument("--fusion_num_layers", default=1, type=int, help="Number of 
 parser.add_argument("--fusion_d_ffn", default=128, type=int, help="Dimension of the feedforward network in the transformer")
 parser.add_argument("--apply_noise", default=True, type=bool, help="Apply Gaussian noise to the data as augmentation")
 parser.add_argument("--noise_std", default=0.01, type=float, help="Standard deviation for Gaussian noise")
+parser.add_argument("--use_film", default=False, type=bool, help="Whether to use Feature-wise Linear Modulation (FiLM) for 1D-2D fusion")
 
 # Set-up parameters
 parser.add_argument("--dataset_folder", default="", type=str, help="Path to the dataset folder")
@@ -239,7 +240,7 @@ def overall_performance(config, cv_type="official"):
 
 def main(config):
     experiment_name = config.experiment_name
-    wandb.init(project="utae_default_v_official", config=config, name=experiment_name,
+    wandb.init(project="TEST", config=config, name=experiment_name,
                tags=[config.run_tag, config.model_tag, config.config_tag])
     wandb.config.update(vars(config))
 
@@ -338,6 +339,7 @@ def main(config):
             num_layers=config.fusion_num_layers,
             num_classes=config.num_classes,
             out_channels=128,
+            use_film=config.use_film,
             climate_input_dim=config.climate_input_dim
         ).to(device)
 
