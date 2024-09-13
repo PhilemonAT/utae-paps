@@ -29,7 +29,7 @@ parser.add_argument(
     type=str,
     help="Type of architecture to use. Can be one of: (utae/unet3d/fpn/convlstm/convgru/uconvlstm/buconvlstm)",
 )
-parser.add_argument("--input_dim", default=21, type=int)
+parser.add_argument("--input_dim", default=10, type=int)
 parser.add_argument("--encoder_widths", default="[64,64,64,128]", type=str)
 parser.add_argument("--decoder_widths", default="[32,32,64,128]", type=str)
 parser.add_argument("--out_conv", default="[32, 20]", type=str)
@@ -42,14 +42,14 @@ parser.add_argument("--n_head", default=16, type=int)
 parser.add_argument("--d_model", default=256, type=int)
 parser.add_argument("--d_k", default=4, type=int)
 parser.add_argument("--encoder", default=False, type=bool)
+parser.add_argument("--include_climate", default=False, type=bool)
+parser.add_argument("--use_FILM", default=False, type=bool)
+parser.add_argument("--climate_input_dim", default=11)
 
 # EarlyFusionModel specific parameters
-parser.add_argument("--climate_input_dim", default=11, type=int, help="Number of climate variables")
-parser.add_argument("--apply_noise", default=True, type=bool, help="Apply Gaussian noise to the data as augmentation")
-parser.add_argument("--noise_std", default=0.01, type=float, help="Standard deviation for Gaussian noise")
+parser.add_argument("--early_fusion_dmodel", default=64, type=int)
 parser.add_argument("--fusion_strategy", default=None, type=str, help="Type of fusion to apply. Can be one of: 'match_dates', 'weekly', 'causal'")
 parser.add_argument("--use_climate_mlp", default=False, type=bool, help="Whether to process the climate data with a small MLP before fusion")
-parser.add_argument("--use_film", default=False, type=bool, help="Whether to use Feature-wise Linear Modulation (FiLM) for 1D-2D fusion")
 
 # Set-up parameters
 parser.add_argument("--dataset_folder", default="", type=str, help="Path to the dataset folder")
@@ -60,6 +60,8 @@ parser.add_argument("--rdm_seed", default=1, type=int, help="Random seed")
 parser.add_argument("--device", default="cuda", type=str, help="Device for tensor computations (cuda/cpu)")
 parser.add_argument("--display_step", default=50, type=int, help="Interval in batches between display of training metrics")
 parser.add_argument("--cache", dest="cache", action="store_true", help="If specified, the whole dataset is kept in RAM")
+parser.add_argument("--apply_noise", default=True, type=bool, help="Apply Gaussian noise to the data as augmentation")
+parser.add_argument("--noise_std", default=0.01, type=float, help="Standard deviation for Gaussian noise")
 
 # Training parameters
 parser.add_argument("--epochs", default=100, type=int, help="Number of epochs per fold")
@@ -71,7 +73,7 @@ parser.add_argument("--cv_type", default="official", type=str, help="Type of cro
 parser.add_argument("--fold", default=None, type=int, help="Specific fold or region to use")
 parser.add_argument("--num_classes", default=20, type=int)
 parser.add_argument("--ignore_index", default=-1, type=int)
-parser.add_argument("--pad_value", default=0, type=float)
+parser.add_argument("--pad_value", default=-1000, type=float)
 parser.add_argument("--padding_mode", default="reflect", type=str)
 parser.add_argument("--val_every", default=1, type=int, help="Interval in epochs between two validation steps.")
 parser.add_argument("--val_after", default=0, type=int, help="Do validation only after that many epochs.")
@@ -84,7 +86,6 @@ parser.add_argument("--config_tag", default="", type=str)
 
 list_args = ["encoder_widths", "decoder_widths", "out_conv"]
 parser.set_defaults(cache=False)
-
 
 def iterate(model, data_loader, criterion, config, optimizer=None, mode="train", device=None):
     loss_meter = tnt.meter.AverageValueMeter()
@@ -237,7 +238,7 @@ def overall_performance(config, cv_type="official"):
 
 def main(config):
     experiment_name = config.experiment_name
-    wandb.init(project="TEST", config=config, name=experiment_name,
+    wandb.init(project="utae_default_v_official", config=config, name=experiment_name,
                tags=[config.run_tag, config.model_tag, config.config_tag])
     wandb.config.update(vars(config))
 
@@ -324,10 +325,37 @@ def main(config):
 
 
         # get U-TAE model
+
+        print("include_climate: ", config.include_climate)
+        print("use_FILM: ", config.use_FILM)
+        print("fusion_strategy: ", config.fusion_strategy)
+        print("use_climate_mlp: ", config.use_climate_mlp)
+
+        config.climate_dim = config.climate_input_dim
+
+        if config.include_climate:
+            if config.fusion_strategy == 'causal':
+                config.climate_dim = config.early_fusion_dmodel
+                
+            else:
+                if config.use_climate_mlp:
+                    config.climate_dim = config.early_fusion_dmodel
+
+            if not config.use_FILM:
+                # concatenate along channel dimension --> input_dim to first conv_block is different
+                config.input_dim = config.input_dim + config.climate_dim
+
+        print("input_dim is: ", config.input_dim)
+        print("climate_input_dim is: ", config.climate_input_dim)
+        print("climate_dim (the one being passed to UTAE) is: ", config.climate_dim)
+
+
         utae_model = model_utils.get_model(config, mode="semantic").to(device)
-        model = EarlyFusionModel(utae_model=utae_model, fusion_strategy=config.fusion_strategy,
-                                 use_climate_mlp=config.use_climate_mlp, pad_value=config.pad_value,
-                                 use_film=config.use_film).to('cuda')
+        model = EarlyFusionModel(utae_model=utae_model, 
+                                 climate_input_dim=config.climate_input_dim,
+                                 d_model=config.early_fusion_dmodel,
+                                 fusion_strategy=config.fusion_strategy,
+                                 use_climate_mlp=config.use_climate_mlp).to('cuda')
 
         config.N_params = utils.get_ntrainparams(model)
         with open(os.path.join(config.res_dir, config.cv_type, "conf.json"), "w") as file:

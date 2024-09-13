@@ -70,6 +70,188 @@ class ClimateTransformerEncoder(nn.Module):
         else:
             return climate_embedding # (B x T' x d_model)
 
+
+class EarlyFusionModel(nn.Module):
+    def __init__(self,
+                 utae_model,
+                 climate_input_dim=11,
+                 d_model=64,
+                 fusion_strategy='match_dates',
+                 use_climate_mlp=False,
+                 mlp_hidden_dim=64):
+        """
+        Initializes the EarlyFusionModel, which integrates climate data into the satellite 
+        data stream at an early stage before passing the combined data through the U-TAE model.
+
+        This model supports different strategies for fusing climate data, such as matching 
+        climate data with satellite observation dates, using weekly climate data, or employing 
+        a causal approach. It can also use an MLP to preprocess climate data and FiLM layers 
+        to modulate satellite features based on climate data.
+
+        Args:
+            utae_model (nn.Module): The U-TAE model instance used for processing satellite data. 
+            climate_input_dim (int): Number of input features in the climate data.
+            d_model (int): The dimensionality used for embeddings.
+            fusion_strategy (str): Strategy for fusing climate data, can be:
+                - 'match_dates': Use only climate data from the exact dates matching the satellite observations.
+                - 'weekly': Use climate data from the whole week prior to each satellite observation.
+                - 'causal': Use a causal transformer to incorporate climate data sequentially.
+            use_climate_mlp (bool): If True, a small MLP processes the climate data before fusion to 
+                                    align it with the satellite data's dimensions.
+            mlp_hidden_dim (int): Hidden dimension size of the MLP used when `use_climate_mlp` is True.
+        """
+        super(EarlyFusionModel, self).__init__()
+ 
+        self.utae_model = utae_model 
+        self.fusion_strategy = fusion_strategy
+        self.use_climate_mlp = use_climate_mlp
+        self.pad_value = self.utae_model.pad_value
+
+        if use_climate_mlp:
+            self.climate_mlp = nn.Sequential(
+                nn.Linear(climate_input_dim, mlp_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(mlp_hidden_dim, d_model)
+            )
+
+
+        if fusion_strategy == 'causal':
+            assert use_climate_mlp == False, "Using climate MLP with causal fusion not implemented"
+
+            self.causal_transformer_encoder = ClimateTransformerEncoder(
+                climate_input_dim=climate_input_dim,
+                d_model=d_model,
+                nhead=4,
+                d_ffn=128,
+                num_layers=1,
+                use_cls_token=False # not using CLS token; need per time step embeddings
+            )
+                    
+    def transform_climate_data(self, sat_data, sat_dates, climate_data, climate_dates):
+        """
+        Fuses satellite and climate data based on the chosen fusion strategy.
+
+        Args:
+            sat_data (Tensor): Satellite data of shape (B x T x C x H x W).
+            sat_dates (Tensor): Dates corresponding to the satellite data (B x T).
+            climate_data (Tensor): Climate data of shape (B x T' x climate_input_dim).
+            climate_dates (Tensor): Dates corresponding to the climate data (B x T').
+
+        Returns:
+            climate_matched (Tensor): Processed climate data of shape (B x T x V) or (B x T x d_model).
+                                      When using 'causal' as fusion_strategy, the latter dimension is
+                                      always d_model. Else, it's V, except if use_climate_mlp was True.
+        """
+
+        batch_size, num_sat_timesteps, _, height, width = sat_data.size()
+
+        if self.fusion_strategy == 'causal':
+            # Create causal mask for the entire sequence
+            causal_mask = torch.triu(torch.ones((climate_dates.size(1), climate_dates.size(1)),
+                                                device=climate_data.device), diagonal=1).bool()
+            
+            # expand mask for batch and heads
+            num_heads = self.causal_transformer_encoder.climate_transformer.layers[0].self_attn.num_heads
+            causal_mask = causal_mask.unsqueeze(0).expand(batch_size, -1, -1) # (B x T' x T')
+            causal_mask = causal_mask.unsqueeze(1).expand(-1, num_heads, -1, -1) # (B x Heads x T' x T')
+            causal_mask = causal_mask.reshape(batch_size * num_heads, climate_dates.size(1), climate_dates.size(1)) # (B*H, T', T')
+            
+            # compute climate embeddings for the entire sequence
+            climate_embeddings = self.causal_transformer_encoder(climate_data, mask=causal_mask) # (B x T' x d_model)
+
+            climate_matched = []
+
+            for b in range(batch_size):
+                batch_climate = []
+                for t in range(num_sat_timesteps):
+                    sat_date = sat_dates[b, t].item()
+
+                    if sat_date != self.pad_value:
+                        # Find the closest valid climate embedding before or at each satellite observation date
+                        closest_climate_idx = (climate_dates[b] <= sat_dates[b, t].item()).nonzero(as_tuple=True)[0].max()
+                        clim_vec = climate_embeddings[b, closest_climate_idx]  # (d_model,)
+                    else:
+                        # sat_date corresponds to a padded entry --> fill with pad_value
+                        clim_vec = torch.full((climate_embeddings.size(-1),), float(self.pad_value), device=climate_data.device) 
+                                       
+                    batch_climate.append(clim_vec)
+                
+                climate_matched.append(torch.stack(batch_climate, dim=0)) # (T x d_model)
+            
+            climate_matched = torch.stack(climate_matched, dim=0) # (B x T x d_model)
+
+            return climate_matched
+
+        # other fusion strategies ('match_dates' or 'weekly')
+        climate_matched = []
+
+        for b in range(sat_data.size(0)): # Loop over the batch
+            batch_sat_data = sat_data[b]
+            batch_sat_dates = sat_dates[b]
+            batch_climate_data = climate_data[b]
+            batch_climate_dates = climate_dates[b]
+
+            batch_climate = []
+
+            for t, sat_date in enumerate(batch_sat_dates): # Loop over time steps
+
+                if self.fusion_strategy == 'match_dates':
+                    climate_indices = (batch_climate_dates == sat_date).nonzero(as_tuple=True)[0]
+                    if len(climate_indices) > 0:
+                        clim_vec = batch_climate_data[climate_indices[0]]
+                    else:
+                        # fill with pad value used for satellite data (-1000)
+                        clim_vec = torch.full((batch_climate_data.size(1),), float(self.pad_value), device=sat_data.device)
+                
+                elif self.fusion_strategy == 'weekly':
+                    clim_indices = (batch_climate_dates < sat_date) & (batch_climate_dates >= (sat_date - 7))
+                    
+                    if clim_indices.any():
+                        clim_vec = batch_climate_data[clim_indices].mean(dim=0)
+                    else:
+                        clim_vec = torch.full((batch_climate_data.size(1),), float(self.pad_value), device=sat_data.device)
+
+                else:
+                    raise ValueError(f"Unknown fusion strategy: {self.fusion_strategy}")
+
+                if hasattr(self, 'climate_mlp'):
+                    clim_vec = self.climate_mlp(clim_vec) # d_model
+              
+                batch_climate.append(clim_vec)
+
+            batch_climate = torch.stack(batch_climate, dim=0) # (T x V) or (T x d_model) if MLP applied
+            climate_matched.append(batch_climate)
+        
+        climate_matched = torch.stack(climate_matched, dim=0) # (B x T x V) or (B x T x d_model) if MLP applied
+        return climate_matched
+
+    def forward(self, input_sat, dates_sat, input_clim, dates_clim):
+        """
+        Forward pass through the EarlyFusionModel.
+
+        Args:
+            input_sat (Tensor): Input satellite data of shape (B x T x C x H x W).
+            dates_sat (Tensor): Dates corresponding to the satellite data (B x T).
+            input_clim (Tensor): Input climate data of shape (B x T' x climate_input_dim).
+            dates_clim (Tensor): Dates corresponding to the climate data (B x T').
+
+        Returns:
+            Tensor: Output of the model after early fusion of satellite and climate data.
+        """
+        climate_matched = self.transform_climate_data(input_sat, dates_sat, input_clim, dates_clim)
+        output = self.utae_model(input=input_sat, 
+                                 climate_input=climate_matched, 
+                                 batch_positions=dates_sat)
+
+        # call UTAE here with input_sat as input images, dates_sat as batch_positions,
+        #                     climate_matched as the corresponding transformed climate data 
+        # Note: When using 'causal', climate_matched has size (B x T x d_model)
+        #       When using 'match_dates' or 'weekly' and NOT using MLP, climate_matched has size (B x T x V)
+        #       ---------------------------------------- USING MLP,     climate_matched has size (B x T x d_model)
+
+        return output
+
+
 class LateFusionModel(nn.Module):
     def __init__(self, 
                  utae_model, 
@@ -164,275 +346,3 @@ class LateFusionModel(nn.Module):
         output = self.final_conv(combined_features)
 
         return output
-
-class EarlyFusionModel(nn.Module):
-    def __init__(self,
-                 utae_model,
-                 climate_input_dim=11,
-                 d_model=64,
-                 fusion_strategy='match_dates',
-                 use_climate_mlp=False,
-                 mlp_hidden_dim=64,
-                 use_film=False,
-                 pad_value=-1000):
-        """
-        Initializes the EarlyFusionModel, which integrates climate data into the satellite 
-        data stream at an early stage before passing the combined data through the U-TAE model.
-
-        This model supports different strategies for fusing climate data, such as matching 
-        climate data with satellite observation dates, using weekly climate data, or employing 
-        a causal approach. It can also use an MLP to preprocess climate data and FiLM layers 
-        to modulate satellite features based on climate data.
-
-        Args:
-            utae_model (nn.Module): The U-TAE model instance used for processing satellite data. 
-            climate_input_dim (int): Number of input features in the climate data.
-            d_model (int): The dimensionality used for embeddings.
-            fusion_strategy (str): Strategy for fusing climate data, can be:
-                - 'match_dates': Use only climate data from the exact dates matching the satellite observations.
-                - 'weekly': Use climate data from the whole week prior to each satellite observation.
-                - 'causal': Use a causal transformer to incorporate climate data sequentially.
-            use_climate_mlp (bool): If True, a small MLP processes the climate data before fusion to 
-                                    align it with the satellite data's dimensions.
-            mlp_hidden_dim (int): Hidden dimension size of the MLP used when `use_climate_mlp` is True.
-            use_film (bool): If True, applies Feature-wise Linear Modulation (FiLM) to fuse climate 
-                             data with satellite data, modulating satellite features based on climate data.
-            pad_value (float): Value used for padding missing data or aligning temporal sequences.
-        """
-        super(EarlyFusionModel, self).__init__()
- 
-        self.utae_model = utae_model 
-        self.fusion_strategy = fusion_strategy
-        self.use_climate_mlp = use_climate_mlp
-        self.use_film = use_film
-        self.pad_value = pad_value
-
-        if use_climate_mlp:
-            self.climate_mlp = nn.Sequential(
-                nn.Linear(climate_input_dim, mlp_hidden_dim),
-                nn.ReLU(),
-                nn.Linear(mlp_hidden_dim, d_model)
-            )
-
-
-        if fusion_strategy == 'causal':
-            assert use_climate_mlp == False, "Using climate MLP with causal fusion not implemented"
-
-            self.causal_transformer_encoder = ClimateTransformerEncoder(
-                climate_input_dim=climate_input_dim,
-                d_model=d_model,
-                nhead=4,
-                d_ffn=128,
-                num_layers=1,
-                use_cls_token=False # not using CLS token; need per time step embeddings
-            )
-
-            if use_film:
-                self.FiLM = FiLMLayer(
-                    clim_vec_dim=d_model,
-                    sat_feature_dim=10
-                )
-        
-        else:
-            if use_film:
-                self.FiLM = FiLMLayer(
-                    clim_vec_dim=climate_input_dim,
-                    sat_feature_dim=10
-                )
-            
-    def fuse_climate_data(self, sat_data, sat_dates, climate_data, climate_dates):
-        """
-        Fuses satellite and climate data based on the chosen fusion strategy.
-
-        Args:
-            sat_data (Tensor): Satellite data of shape (B x T x C x H x W).
-            sat_dates (Tensor): Dates corresponding to the satellite data (B x T).
-            climate_data (Tensor): Climate data of shape (B x T' x climate_input_dim).
-            climate_dates (Tensor): Dates corresponding to the climate data (B x T').
-
-        Returns:
-            Tensor: Fused data of shape (B x T x (C + d_model) x H x W) or (B x T x C x H x W) if FiLM is applied.
-        """
-
-        batch_size, num_sat_timesteps, _, height, width = sat_data.size()
-
-        if self.fusion_strategy == 'causal':
-            # Create causal mask for the entire sequence
-            causal_mask = torch.triu(torch.ones((climate_dates.size(1), climate_dates.size(1)),
-                                                device=climate_data.device), diagonal=1).bool()
-            
-            # expand mask for batch and heads
-            num_heads = self.causal_transformer_encoder.climate_transformer.layers[0].self_attn.num_heads
-            causal_mask = causal_mask.unsqueeze(0).expand(batch_size, -1, -1) # (B x T' x T')
-            causal_mask = causal_mask.unsqueeze(1).expand(-1, num_heads, -1, -1) # (B x Heads x T' x T')
-            causal_mask = causal_mask.reshape(batch_size * num_heads, climate_dates.size(1), climate_dates.size(1)) # (B*H, T', T')
-            
-            # compute climate embeddings for the entire sequence
-            climate_embeddings = self.causal_transformer_encoder(climate_data, mask=causal_mask) # (B x T' x d_model)
-
-            fused_data = []
-
-            for b in range(batch_size):
-                batch_fused = []
-                for t in range(num_sat_timesteps):
-                    sat_date = sat_dates[b, t].item()
-
-                    if sat_date != self.pad_value:
-                        # Find the closest valid climate embedding before or at each satellite observation date
-                        closest_climate_idx = (climate_dates[b] <= sat_dates[b, t].item()).nonzero(as_tuple=True)[0].max()
-                        clim_vec = climate_embeddings[b, closest_climate_idx]  # (d_model,)
-                    else:
-                        # sat_date corresponds to a padded entry --> fill with pad_value
-                        clim_vec = torch.full((climate_embeddings.size(-1),), float(self.pad_value), device=climate_data.device) 
-                    
-                    if not self.use_film:
-                        # Expand and combine with satellite features
-                        clim_vec_expanded = clim_vec.unsqueeze(-1).unsqueeze(-1).expand(-1, height, width) # (d_model x H x W)
-                        combined = torch.cat((sat_data[b, t], clim_vec_expanded), dim=0) # ((C + d_model) x H x W)
-                    else:
-                        pad_mask_t = (sat_data[b, t] == self.pad_value).all(dim=-1).all(dim=-1).all(dim=-1)
-                        combined = self.FiLM(sat_data[b, t], clim_vec, pad_mask_t) # (C x H x W)
-
-                    batch_fused.append(combined)
-                fused_data.append(torch.stack(batch_fused, dim=0)) # (T x (C + d_model) x H x W) or (T x C x H x W) if FiLM applied
-            
-            fused_data = torch.stack(fused_data, dim=0) # (B x T x (C + d_model) x H x W) or (B x T x C x H x W) if FiLM applied
-
-            return fused_data
-
-        # other fusion strategies ('match_dates' or 'weekly')
-        fused_data = []
-
-        for b in range(sat_data.size(0)): # Loop over the batch
-            batch_sat_data = sat_data[b]
-            batch_sat_dates = sat_dates[b]
-            batch_climate_data = climate_data[b]
-            batch_climate_dates = climate_dates[b]
-
-            batch_fused = []
-
-            for t, sat_date in enumerate(batch_sat_dates): # Loop over time steps
-
-                if self.fusion_strategy == 'match_dates':
-                    climate_indices = (batch_climate_dates == sat_date).nonzero(as_tuple=True)[0]
-                    if len(climate_indices) > 0:
-                        clim_vec = batch_climate_data[climate_indices[0]]
-                    else:
-                        # fill with pad value used for satellite data (-1000)
-                        clim_vec = torch.full((batch_climate_data.size(1),), float(self.pad_value), device=sat_data.device)
-                
-                elif self.fusion_strategy == 'weekly':
-                    clim_indices = (batch_climate_dates < sat_date) & (batch_climate_dates >= (sat_date - 7))
-                    
-                    if clim_indices.any():
-                        clim_vec = batch_climate_data[clim_indices].mean(dim=0)
-                    else:
-                        clim_vec = torch.full((batch_climate_data.size(1),), float(self.pad_value), device=sat_data.device)
-
-                else:
-                    raise ValueError(f"Unknown fusion strategy: {self.fusion_strategy}")
-
-                if not self.use_film:
-                    if hasattr(self, 'climate_mlp'):
-                        clim_vec = self.climate_mlp(clim_vec)
-            
-                    clim_vec_expanded = clim_vec.unsqueeze(-1).unsqueeze(-1).expand(-1, batch_sat_data.size(2), batch_sat_data.size(3))
-                    combined = torch.cat((batch_sat_data[t], clim_vec_expanded), dim=0) # ((C + d_model) x H x W)
-                
-                else:
-                    # Use feature-wise linear modulation to fuse climate and satellite data
-                    pad_mask_t = (batch_sat_data[t] == self.pad_value).all(dim=-1).all(dim=-1).all(dim=-1)
-
-                    combined = self.FiLM(batch_sat_data[t], clim_vec, pad_mask_t) # (C x H x W)
-
-                batch_fused.append(combined)
-
-            batch_fused = torch.stack(batch_fused, dim=0) # (T x (C + d_model) x H x W) or (T x C x H x W) if FiLM applied
-            fused_data.append(batch_fused)
-        
-        fused_data = torch.stack(fused_data, dim=0) # (B x T x (C + d_model) x H x W) or (B x T x C x H x W) if FiLM applied
-        return fused_data
-
-    def forward(self, input_sat, dates_sat, input_clim, dates_clim):
-        """
-        Forward pass through the EarlyFusionModel.
-
-        Args:
-            input_sat (Tensor): Input satellite data of shape (B x T x C x H x W).
-            dates_sat (Tensor): Dates corresponding to the satellite data (B x T).
-            input_clim (Tensor): Input climate data of shape (B x T' x climate_input_dim).
-            dates_clim (Tensor): Dates corresponding to the climate data (B x T').
-
-        Returns:
-            Tensor: Output of the model after early fusion of satellite and climate data.
-        """
-        fused_data = self.fuse_climate_data(input_sat, dates_sat, input_clim, dates_clim)
-        output = self.utae_model(fused_data, batch_positions=dates_sat)
-
-        return output
-    
-class FiLMLayer(nn.Module):
-    def __init__(self,
-                 clim_vec_dim,
-                 sat_feature_dim=10,
-                 hidden_dim=128):
-        super(FiLMLayer, self).__init__()
-        """
-        Initializes the FiLMLayer module, which applies Feature-wise Linear Modulation (FiLM)
-        to modulate satellite features based on climate data. 
-
-        FiLM, as described in the paper "FiLM: Visual Reasoning with a General Conditioning 
-        Layer" by Perez et al. (2018), modulates neural network feature maps through an affine 
-        transformation (scaling and shifting) using learned parameters (gamma and beta) that 
-        are conditioned on some external input — in this case, the climate data.
-
-        Args:
-            clim_vec_dim (int): Dimension of the climate vector input.
-            sat_feature_dim (int): Dimension of the satellite feature maps to be modulated.
-            hidden_dim (int): Hidden dimension size for the MLP used to generate FiLM parameters.
-        """
-        
-        self.mlp = nn.Sequential(
-            nn.Linear(clim_vec_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 2 * sat_feature_dim), # outputs both gamma and beta
-            nn.Sigmoid()                                # since we are only working with standardized data
-        )
-
-    def forward(self, sat_features, clim_vec, pad_mask=None):
-        """
-        Applies FiLM modulation to satellite features using climate vector.
-
-        The FiLM modulation scales and shifts the satellite features based on parameters 
-        generated from the climate vector. This is achieved by computing gamma (scale) and beta 
-        (shift) parameters from the climate vector through an MLP, then applying these 
-        parameters to the satellite features.
-
-        Args:
-            sat_features (Tensor): Satellite feature maps of shape (C x H x W) or (B x C x H x W) if batched.
-            clim_vec (Tensor): Climate vector of shape (clim_vec_dim) or (B x clim_vec_dim) if batched.
-            pad_mask ....
-            
-        Returns:
-            Tensor: Modulated satellite features of shape (C x H x W) or (B x C x H x W) if batched.
-        """
-        
-        if pad_mask==True:
-            return sat_features
-        
-        else:
-            film_params = self.mlp(clim_vec)        # (2*feature_dim) or (B x 2*feature_dim) if batched input
-            
-            if film_params.dim() == 1:
-                # split along first (and only) dimension 
-                gamma, beta = film_params.chunk(2, dim=0)
-            else:
-                # split along second dimension (for batched input)
-                gamma, beta = film_params.chunk(2, dim=1)
-
-            gamma = gamma.unsqueeze(-1).unsqueeze(-1)   # (feature_dim, 1, 1) or (B x feature_dim x 1 x 1) if batched input
-            beta = beta.unsqueeze(-1).unsqueeze(-1)     # (feature_dim, 1, 1) or (B x feature_dim x 1 x 1) if batched input
-
-            modulated_features = gamma * sat_features + beta
-            
-            return modulated_features
