@@ -42,7 +42,7 @@ parser.add_argument("--n_head", default=16, type=int)
 parser.add_argument("--d_model", default=256, type=int)
 parser.add_argument("--d_k", default=4, type=int)
 parser.add_argument("--encoder", default=False, type=bool)
-parser.add_argument("--include_climate", default=False, type=bool)
+parser.add_argument("--include_climate_early", default=False, type=bool)
 parser.add_argument("--use_FILM", default=False, type=bool)
 parser.add_argument("--climate_input_dim", default=11)
 
@@ -326,14 +326,14 @@ def main(config):
 
         # get U-TAE model
 
-        print("include_climate: ", config.include_climate)
+        print("include_climate: ", config.include_climate_early)
         print("use_FILM: ", config.use_FILM)
         print("fusion_strategy: ", config.fusion_strategy)
         print("use_climate_mlp: ", config.use_climate_mlp)
 
         config.climate_dim = config.climate_input_dim
 
-        if config.include_climate:
+        if config.include_climate_early:
             if config.fusion_strategy == 'causal':
                 config.climate_dim = config.early_fusion_dmodel
                 

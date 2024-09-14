@@ -29,9 +29,9 @@ class UTAE(nn.Module):
         return_maps=False,
         pad_value=-1000,
         padding_mode="reflect",
-        include_climate=False,
+        include_climate_early=False,
         climate_dim=None,
-        use_FILM=False
+        use_FILM_early=False
     ):
         """
         U-TAE architecture for spatio-temporal encoding of satellite image time series.
@@ -66,9 +66,9 @@ class UTAE(nn.Module):
             return_maps (bool): If true, the feature maps instead of the class scores are returned (default False)
             pad_value (float): Value used by the dataloader for temporal padding.
             padding_mode (str): Spatial padding strategy for convolutional layers (passed to nn.Conv2d).
-            include_climate (bool): If true, fuses climate data with satellite data.
+            include_climate_early (bool): If true, fuses climate data with satellite data.
             climate_dim (int): The dimension of the climate data processed by the EarlyFusionModel 
-            use_FILM (bool): If true, uses feature-wise linear modulation (FiLM) to fuse climate data with satellite data. 
+            use_FILM_early (bool): If true, uses feature-wise linear modulation (FiLM) to fuse climate data with satellite data. 
                              Default (False): concatenates climate data along the channel dimension of the satellite data.
         """
         super(UTAE, self).__init__()
@@ -85,8 +85,8 @@ class UTAE(nn.Module):
         self.pad_value = pad_value
         self.encoder = encoder
         
-        self.include_climate = include_climate
-        self.use_FILM = use_FILM
+        self.include_climate_early = include_climate_early
+        self.use_FILM_early = use_FILM_early
         
         if encoder:
             self.return_maps = True
@@ -140,19 +140,19 @@ class UTAE(nn.Module):
         self.temporal_aggregator = Temporal_Aggregator(mode=agg_mode)
         self.out_conv = ConvBlock(nkernels=[decoder_widths[0]] + out_conv, padding_mode=padding_mode)
 
-        if include_climate and use_FILM:
-            assert climate_dim is not None, "If use_FILM is True, must specify its input dimension"
+        if self.include_climate_early and use_FILM_early:
+            assert climate_dim is not None, "If use_FILM_early is True, must specify its input dimension"
             self.FILM_Layer = FiLM(clim_vec_dim=climate_dim,
                                    sat_feature_dim=encoder_widths[0])
 
-    def forward(self, input, climate_input, batch_positions=None, return_att=False):
+    def forward(self, input, climate_input=None, batch_positions=None, return_att=False):
         pad_mask = (
             (input == self.pad_value).all(dim=-1).all(dim=-1).all(dim=-1)
         )  # BxT pad mask
 
-        if self.include_climate:
+        if self.include_climate_early:
             # climate_input of shape (B x T x climate_input_dim)
-            if not self.use_FILM:
+            if not self.use_FILM_early:
                 # Concatenate along the channel dimension
                 _, _, _, H, W = input.size()
                 clim_vec_expanded = climate_input.unsqueeze(-1).unsqueeze(-1)   # (B x T x climate_input_dim x 1 x 1)

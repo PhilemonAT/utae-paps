@@ -43,6 +43,9 @@ parser.add_argument("--n_head", default=16, type=int)
 parser.add_argument("--d_model", default=256, type=int)
 parser.add_argument("--d_k", default=4, type=int)
 parser.add_argument("--encoder", default=True, type=bool)
+parser.add_argument("--include_climate_early", default=False, type=bool)
+parser.add_argument("--climate_dim", default=False, type=bool)
+parser.add_argument("--use_FILM_early", default=False, type=bool)
 
 # LateFusionModel specific parameters
 parser.add_argument("--climate_input_dim", default=11, type=int, help="Number of climate variables")
@@ -52,7 +55,7 @@ parser.add_argument("--fusion_num_layers", default=1, type=int, help="Number of 
 parser.add_argument("--fusion_d_ffn", default=128, type=int, help="Dimension of the feedforward network in the transformer")
 parser.add_argument("--apply_noise", default=True, type=bool, help="Apply Gaussian noise to the data as augmentation")
 parser.add_argument("--noise_std", default=0.01, type=float, help="Standard deviation for Gaussian noise")
-parser.add_argument("--use_film", default=False, type=bool, help="Whether to use Feature-wise Linear Modulation (FiLM) for 1D-2D fusion")
+parser.add_argument("--use_FILM", default=False, type=bool, help="Whether to use Feature-wise Linear Modulation (FiLM) for 1D-2D fusion")
 
 # Set-up parameters
 parser.add_argument("--dataset_folder", default="", type=str, help="Path to the dataset folder")
@@ -337,10 +340,9 @@ def main(config):
             nhead=config.fusion_nhead,
             d_ffn=config.fusion_d_ffn,
             num_layers=config.fusion_num_layers,
-            num_classes=config.num_classes,
-            out_channels=128,
-            use_film=config.use_film,
-            climate_input_dim=config.climate_input_dim
+            out_conv=config.out_conv,
+            climate_input_dim=config.climate_input_dim,
+            use_FILM=config.use_FILM,
         ).to(device)
 
         config.N_params = utils.get_ntrainparams(model)

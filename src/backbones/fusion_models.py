@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 from torch.nn import TransformerEncoderLayer
@@ -19,10 +20,12 @@ class ClimateTransformerEncoder(nn.Module):
                  nhead=4,
                  d_ffn=128,
                  num_layers=1,
-                 use_cls_token=True):
+                 use_cls_token=True,
+                 max_length=5000):
         super(ClimateTransformerEncoder, self).__init__()
         
         self.climate_projection = nn.Linear(climate_input_dim, d_model)
+        self.positional_encoding = PositionalEncoding(d_model=d_model, max_length=max_length)
         self.use_cls_token = use_cls_token
 
         if use_cls_token:
@@ -50,6 +53,7 @@ class ClimateTransformerEncoder(nn.Module):
             Tensor: The output embedding of shape (B x d_model) if using CLS token, otherwise (B x T' x d_model).
         """
         climate_data = self.climate_projection(climate_data) # (B x T' x d_model)
+        climate_data = self.positional_encoding(climate_data) # add positional encoding information
         batch_size, seq_len, _ = climate_data.size() 
 
         if self.use_cls_token:
@@ -254,14 +258,14 @@ class EarlyFusionModel(nn.Module):
 
 class LateFusionModel(nn.Module):
     def __init__(self, 
-                 utae_model, 
+                 utae_model,
                  d_model=64, 
                  nhead=4, 
                  d_ffn=128, 
                  num_layers=1, 
-                 num_classes=20, 
-                 out_channels=128,
-                 climate_input_dim=11):
+                 out_conv=[32, 20],
+                 climate_input_dim=11,
+                 use_FILM=False):
         """
         Initializes the LateFusionModel which combines satellite image time series and 
         climate data at a later stage in the network. The model uses a U-TAE model for 
@@ -275,14 +279,14 @@ class LateFusionModel(nn.Module):
             nhead (int): Number of attention heads in the transformer encoder.
             d_ffn (int): Dimension of the feedforward network inside the transformer encoder.
             num_layers (int): Number of layers in the transformer encoder.
-            num_classes (int): Number of output classes for the final classification.
-            out_channels (int): Number of output channels for the final convolutional layers.
+            out_conv (int): Number of output channels for the final convolutional layers.
             climate_input_dim (int): Number of climate variables in the input data.
         """
         super(LateFusionModel, self).__init__()
         
         self.utae_model = utae_model
         self.d_model = d_model
+        self.use_FILM = use_FILM
 
         # Use the ClimateTransformerEncoder for climate data encoding
         self.climate_transformer_encoder = ClimateTransformerEncoder(
@@ -294,19 +298,35 @@ class LateFusionModel(nn.Module):
             use_cls_token=True
         )
 
+        if use_FILM:
+            input_dim = self.utae_model.decoder_widths[0]
+            self.FILM_layer = FiLM(clim_vec_dim=d_model,
+                                   sat_feature_dim=input_dim)
+        else:
+            # accounting for concatenating the global embedding of climate data (with d_model channels)
+            input_dim = self.utae_model.decoder_widths[0] + d_model 
+
         self.final_conv = nn.Sequential(
             nn.Conv2d(
-                in_channels=self.utae_model.decoder_widths[0] + d_model,  # adding the global embedding of climate data (with d_model channels)
-                out_channels=out_channels,
+                in_channels=input_dim,  
+                out_channels=out_conv[0],
                 kernel_size=3,
-                padding=1
+                padding=1,
+                stride=1,
+                padding_mode="reflect"
             ),
+            nn.BatchNorm2d(out_conv[0]),
             nn.ReLU(),
             nn.Conv2d( 
-                in_channels=out_channels, 
-                out_channels=num_classes,
-                kernel_size=1
-            ) 
+                in_channels=out_conv[0], 
+                out_channels=out_conv[1],
+                kernel_size=3,
+                padding=1,
+                stride=1,
+                padding_mode="reflect"
+            ),
+            nn.BatchNorm2d(out_conv[1]),
+            nn.ReLU()
         )
     
     def forward(self, input_sat, dates_sat, input_clim):
@@ -333,16 +353,115 @@ class LateFusionModel(nn.Module):
         # Process climate data with the transformer encoder
         climate_embedding = self.climate_transformer_encoder(input_clim)  # (B x d_model)
 
+        if self.use_FILM:
+            combined_features = self.FILM_layer(satellite_features, climate_embedding)
 
-        # Expand climate embedding to match spatial dimension
-        climate_embedding = climate_embedding.unsqueeze(-1).unsqueeze(-1)  # (B x d_model x 1 x 1)
-        climate_embedding = climate_embedding.expand(-1, -1, 
-                                                    satellite_features.size(2), 
-                                                    satellite_features.size(3))  # (B x d_model x H x W)
-        # Concatenate satellite features and climate embedding
-        combined_features = torch.cat((satellite_features, climate_embedding), dim=1)
+        else:
+            # Expand climate embedding to match spatial dimension
+            climate_embedding = climate_embedding.unsqueeze(-1).unsqueeze(-1)  # (B x d_model x 1 x 1)
+            climate_embedding = climate_embedding.expand(-1, -1, 
+                                                        satellite_features.size(2), 
+                                                        satellite_features.size(3))  # (B x d_model x H x W)
+            # Concatenate satellite features and climate embedding
+            combined_features = torch.cat((satellite_features, climate_embedding), dim=1)
         
         # Final convolution to generate the output
         output = self.final_conv(combined_features)
 
         return output
+    
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_length = 5000):
+        """
+        Args:
+            d_model:    dimension of embeddings
+            max_length: max sequence length
+        """
+        super().__init__()
+
+        pe = torch.zeros(max_length, d_model)
+
+        k = torch.arange(0, max_length).unsqueeze(1)
+
+        div_term = torch.exp(
+            torch.arange(0, d_model, 2) * -(math.log(10000.0) / d_model)
+        )
+
+        pe[:, 0::2] = torch.sin(k * div_term)
+        pe[:, 1::2] = torch.cos(k * div_term)
+
+        pe = pe.unsqueeze(0)
+        
+        self.register_buffer("pe", pe)
+
+    def forward(self, x):
+        """
+        Args:
+            x: embeddings                     (B x T x d_model)
+        
+        Returns:
+            embeddings + positional encodings (B x T x d_model)
+        
+        """
+        x = x + self.pe[:, :x.size(1)].requires_grad_(False)
+
+        return x
+    
+
+class FiLM(nn.Module):
+    def __init__(self,
+                 clim_vec_dim,
+                 sat_feature_dim,
+                 hidden_dim=128):
+        super(FiLM, self).__init__()
+        """
+        Initializes the FiLMLayer module, which applies Feature-wise Linear Modulation (FiLM)
+        to modulate satellite features based on climate data. 
+
+        FiLM, as described in the paper "FiLM: Visual Reasoning with a General Conditioning 
+        Layer" by Perez et al. (2018), modulates neural network feature maps through an affine 
+        transformation (scaling and shifting) using learned parameters (gamma and beta) that 
+        are conditioned on some external input — in this case, the climate data.
+
+        Args:
+            clim_vec_dim (int): Dimension of the climate vector input.
+            sat_feature_dim (int): Dimension of the satellite feature maps to be modulated.
+            hidden_dim (int): Hidden dimension size for the MLP used to generate FiLM parameters.
+        """
+        
+        self.mlp = nn.Sequential(
+            nn.Linear(clim_vec_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 2 * sat_feature_dim), # outputs both gamma and beta
+            nn.Sigmoid()                                # since we are only working with standardized data
+        )
+
+    def forward(self, sat_features, clim_vec):
+        """
+        Applies FiLM modulation to satellite features using climate vector.
+
+        The FiLM modulation scales and shifts the satellite features based on parameters 
+        generated from the climate vector. This is achieved by computing gamma (scale) and beta 
+        (shift) parameters from the climate vector through an MLP, then applying these 
+        parameters to the satellite features.
+
+        Args:
+            sat_features (Tensor): Satellite feature maps of shape (B x decoder_widths[0] x H x W) 
+            clim_vec (Tensor): Climate vector of shape (B x d_model)
+            
+        Returns:
+            Tensor: Modulated satellite features of shape (B x decoder_widths[0] x H x W)
+        """
+        
+        film_params = self.mlp(clim_vec)        # (B x 2*decoder_widths[0])
+        
+        # split along last dimension
+        gamma, beta = film_params.chunk(2, dim=-1)
+
+        gamma = gamma.unsqueeze(-1).unsqueeze(-1)   # (B x decoder_widths[0] x 1 x 1)
+        beta = beta.unsqueeze(-1).unsqueeze(-1)     # (B x decoder_widths[0] x 1 x 1)
+
+        modulated_features = gamma * sat_features + beta
+
+        return modulated_features # (B x T x C x H x W)
