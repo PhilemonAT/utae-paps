@@ -157,7 +157,7 @@ class UTAE(nn.Module):
                 _, _, _, H, W = input.size()
                 clim_vec_expanded = climate_input.unsqueeze(-1).unsqueeze(-1)   # (B x T x climate_input_dim x 1 x 1)
                 clim_vec_expanded = clim_vec_expanded.expand(-1, -1, -1, H, W)  # (B x T x climate_input_dim x H x W)
-                input = torch.cat((input, clim_vec_expanded), dim=2)            # (B x T x (C1 + climate_input_dim) x H x W)
+                input = torch.cat((input, clim_vec_expanded), dim=2)            # (B x T x (C + climate_input_dim) x H x W)
                 out = self.in_conv.smart_forward(input)                         # (B x T x C1 x H x W)
 
             else:
