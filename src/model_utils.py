@@ -23,8 +23,10 @@ def get_model(config, mode="semantic"):
                 pad_value=config.pad_value,
                 padding_mode=config.padding_mode,
                 include_climate_early=config.include_climate_early,
+                include_climate_mid=config.include_climate_mid,
                 climate_dim=config.climate_dim,
-                use_FILM_early=config.use_FILM_early
+                use_FILM_early=config.use_FILM_early,
+                FILM_hidden_dim=config.FILM_hidden_dim,
             )
         elif config.model == "unet3d":
             model = unet3d.UNet3D(

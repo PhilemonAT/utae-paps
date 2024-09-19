@@ -33,7 +33,7 @@ parser.add_argument(
 parser.add_argument("--input_dim", default=10, type=str)
 parser.add_argument("--encoder_widths", default="[64,64,64,128]", type=str)
 parser.add_argument("--decoder_widths", default="[32,32,64,128]", type=str)
-parser.add_argument("--out_conv", default="[32, 20]", type=str)
+parser.add_argument("--out_conv", default="[32, 32, 20]", type=str)
 parser.add_argument("--str_conv_k", default=4, type=int)
 parser.add_argument("--str_conv_s", default=2, type=int)
 parser.add_argument("--str_conv_p", default=1, type=int)
@@ -295,9 +295,35 @@ def main(config):
             noise_std=config.noise_std,
         )
         
-        dt_train = PASTIS_Climate_Dataset(**dt_args, folds=train_folds, cv_type=config.cv_type, cache=config.cache)
-        dt_val = PASTIS_Climate_Dataset(**dt_args, folds=val_fold, cv_type=config.cv_type, cache=config.cache)
-        dt_test = PASTIS_Climate_Dataset(**dt_args, folds=test_fold, cv_type=config.cv_type)
+        if config.cv_type == 'regions':
+            class_mapping = {
+                0: 0,   # keep background
+                1: 1,   # Keep class 1 unchanged
+                2: 19,
+                3: 19,
+                4: 19,
+                5: 19,
+                6: 19,
+                7: 7,   # Keep class 7 unchanged
+                8: 8,   # Keep class 8 unchanged
+                9: 19,
+                10: 10, # Keep class 10 unchanged
+                11: 19,
+                12: 12, # Keep class 12 unchanged
+                13: 19,
+                14: 14, # Keep class 14 unchanged
+                15: 19,
+                16: 19,
+                17: 19,
+                18: 19,
+                19: 19,
+            }
+        else:
+            class_mapping = None
+
+        dt_train = PASTIS_Climate_Dataset(**dt_args, folds=train_folds, cv_type=config.cv_type, class_mapping=class_mapping, cache=config.cache)
+        dt_val = PASTIS_Climate_Dataset(**dt_args, folds=val_fold, cv_type=config.cv_type, class_mapping=class_mapping, cache=config.cache)
+        dt_test = PASTIS_Climate_Dataset(**dt_args, folds=test_fold, cv_type=config.cv_type, class_mapping=class_mapping)
         
         
         collate_fn = lambda x: utils.pad_collate(x, pad_value=config.pad_value)

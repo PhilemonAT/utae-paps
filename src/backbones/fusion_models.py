@@ -82,7 +82,10 @@ class EarlyFusionModel(nn.Module):
                  d_model=64,
                  fusion_strategy='match_dates',
                  use_climate_mlp=False,
-                 mlp_hidden_dim=64):
+                 mlp_hidden_dim=64,
+                 nhead_climate_transformer=4,
+                 d_ffn_climate_transformer=128,
+                 num_layers_climate_transformer=1):
         """
         Initializes the EarlyFusionModel, which integrates climate data into the satellite 
         data stream at an early stage before passing the combined data through the U-TAE model.
@@ -125,9 +128,9 @@ class EarlyFusionModel(nn.Module):
             self.causal_transformer_encoder = ClimateTransformerEncoder(
                 climate_input_dim=climate_input_dim,
                 d_model=d_model,
-                nhead=4,
-                d_ffn=128,
-                num_layers=1,
+                nhead=nhead_climate_transformer,
+                d_ffn=d_ffn_climate_transformer,
+                num_layers=num_layers_climate_transformer,
                 use_cls_token=False # not using CLS token; need per time step embeddings
             )
                     
@@ -263,7 +266,7 @@ class LateFusionModel(nn.Module):
                  nhead=4, 
                  d_ffn=128, 
                  num_layers=1, 
-                 out_conv=[32, 20],
+                 out_conv=[32, 32, 20],
                  climate_input_dim=11,
                  use_FILM=False):
         """
@@ -317,8 +320,8 @@ class LateFusionModel(nn.Module):
             ),
             nn.BatchNorm2d(out_conv[0]),
             nn.ReLU(),
-            nn.Conv2d( 
-                in_channels=out_conv[0], 
+            nn.Conv2d(
+                in_channels=out_conv[0],  
                 out_channels=out_conv[1],
                 kernel_size=3,
                 padding=1,
@@ -326,7 +329,15 @@ class LateFusionModel(nn.Module):
                 padding_mode="reflect"
             ),
             nn.BatchNorm2d(out_conv[1]),
-            nn.ReLU()
+            nn.ReLU(),
+            nn.Conv2d( 
+                in_channels=out_conv[1], 
+                out_channels=out_conv[2],
+                kernel_size=3,
+                padding=1,
+                stride=1,
+                padding_mode="reflect"
+            )
         )
     
     def forward(self, input_sat, dates_sat, input_clim):

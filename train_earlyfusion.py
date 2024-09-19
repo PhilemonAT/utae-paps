@@ -43,13 +43,19 @@ parser.add_argument("--d_model", default=256, type=int)
 parser.add_argument("--d_k", default=4, type=int)
 parser.add_argument("--encoder", default=False, type=bool)
 parser.add_argument("--include_climate_early", default=False, type=bool)
-parser.add_argument("--use_FILM", default=False, type=bool)
+parser.add_argument("--include_climate_mid", default=False, type=bool)
+parser.add_argument("--use_FILM_early", default=False, type=bool)
 parser.add_argument("--climate_input_dim", default=11)
+parser.add_argument("--FILM_hidden_dim", default=128)
 
 # EarlyFusionModel specific parameters
 parser.add_argument("--early_fusion_dmodel", default=64, type=int)
 parser.add_argument("--fusion_strategy", default=None, type=str, help="Type of fusion to apply. Can be one of: 'match_dates', 'weekly', 'causal'")
 parser.add_argument("--use_climate_mlp", default=False, type=bool, help="Whether to process the climate data with a small MLP before fusion")
+parser.add_argument("--nhead_climate_transformer", default=4, type=int)
+parser.add_argument("--d_ffn_climate_transformer", default=128, type=int)
+parser.add_argument("--num_layers_climate_transformer", default=1, type=int)
+
 
 # Set-up parameters
 parser.add_argument("--dataset_folder", default="", type=str, help="Path to the dataset folder")
@@ -238,7 +244,7 @@ def overall_performance(config, cv_type="official"):
 
 def main(config):
     experiment_name = config.experiment_name
-    wandb.init(project="utae_default_v_official", config=config, name=experiment_name,
+    wandb.init(project="TEST", config=config, name=experiment_name,
                tags=[config.run_tag, config.model_tag, config.config_tag])
     wandb.config.update(vars(config))
 
@@ -289,9 +295,35 @@ def main(config):
             apply_noise=config.apply_noise,
             noise_std=config.noise_std    
         )
+
+        if config.cv_type == 'regions':
+            class_mapping = {
+                0: 0,   # keep background
+                1: 1,   # Keep class 1 unchanged
+                2: 19,
+                3: 19,
+                4: 19,
+                5: 19,
+                6: 19,
+                7: 7,   # Keep class 7 unchanged
+                8: 8,   # Keep class 8 unchanged
+                9: 19,
+                10: 10, # Keep class 10 unchanged
+                11: 19,
+                12: 12, # Keep class 12 unchanged
+                13: 19,
+                14: 14, # Keep class 14 unchanged
+                15: 19,
+                16: 19,
+                17: 19,
+                18: 19,
+                19: 19,
+            }
+        else:
+            class_mapping = None
         
-        dt_train = PASTIS_Climate_Dataset(**dt_args, folds=train_folds, cv_type=config.cv_type, cache=config.cache)
-        dt_val = PASTIS_Climate_Dataset(**dt_args, folds=val_fold, cv_type=config.cv_type, cache=config.cache)
+        dt_train = PASTIS_Climate_Dataset(**dt_args, folds=train_folds, cv_type=config.cv_type, class_mapping=class_mapping, cache=config.cache)
+        dt_val = PASTIS_Climate_Dataset(**dt_args, folds=val_fold, cv_type=config.cv_type, class_mapping=class_mapping, cache=config.cache)
         dt_test = PASTIS_Climate_Dataset(**dt_args, folds=test_fold, cv_type=config.cv_type)
                 
         collate_fn = lambda x: utils.pad_collate(x, pad_value=config.pad_value)
@@ -326,14 +358,15 @@ def main(config):
 
         # get U-TAE model
 
-        print("include_climate: ", config.include_climate_early)
-        print("use_FILM: ", config.use_FILM)
+        print("include_climate_early: ", config.include_climate_early)
+        print("include_climate_mid: ", config.include_climate_mid)
+        print("use_FILM_early: ", config.use_FILM_early)
         print("fusion_strategy: ", config.fusion_strategy)
         print("use_climate_mlp: ", config.use_climate_mlp)
 
         config.climate_dim = config.climate_input_dim
 
-        if config.include_climate_early:
+        if config.include_climate_early or config.include_climate_mid:
             if config.fusion_strategy == 'causal':
                 config.climate_dim = config.early_fusion_dmodel
                 
@@ -341,7 +374,7 @@ def main(config):
                 if config.use_climate_mlp:
                     config.climate_dim = config.early_fusion_dmodel
 
-            if not config.use_FILM:
+            if not config.use_FILM_early and not config.include_climate_mid:
                 # concatenate along channel dimension --> input_dim to first conv_block is different
                 config.input_dim = config.input_dim + config.climate_dim
 
@@ -355,7 +388,11 @@ def main(config):
                                  climate_input_dim=config.climate_input_dim,
                                  d_model=config.early_fusion_dmodel,
                                  fusion_strategy=config.fusion_strategy,
-                                 use_climate_mlp=config.use_climate_mlp).to('cuda')
+                                 use_climate_mlp=config.use_climate_mlp,
+                                 nhead_climate_transformer=config.nhead_climate_transformer,
+                                 d_ffn_climate_transformer=config.d_ffn_climate_transformer,
+                                 num_layers_climate_transformer=config.num_layers_climate_transformer
+                                 ).to('cuda')
 
         config.N_params = utils.get_ntrainparams(model)
         with open(os.path.join(config.res_dir, config.cv_type, "conf.json"), "w") as file:
