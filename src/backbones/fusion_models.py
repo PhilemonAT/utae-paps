@@ -63,7 +63,8 @@ class ClimateTransformerEncoder(nn.Module):
 
         # Apply transformer encoder
         if mask is not None:
-            climate_embedding = self.climate_transformer(climate_data, mask=mask)
+            climate_embedding = self.climate_transformer(climate_data, mask=mask, 
+                                                         is_causal=True)
         else:
             climate_embedding = self.climate_transformer(climate_data)
 
@@ -155,16 +156,19 @@ class EarlyFusionModel(nn.Module):
         if self.fusion_strategy == 'causal':
             # Create causal mask for the entire sequence
             causal_mask = torch.triu(torch.ones((climate_dates.size(1), climate_dates.size(1)),
-                                                device=climate_data.device), diagonal=1).bool()
+                                                device=climate_data.device), diagonal=1)
             
             # expand mask for batch and heads
             num_heads = self.causal_transformer_encoder.climate_transformer.layers[0].self_attn.num_heads
             causal_mask = causal_mask.unsqueeze(0).expand(batch_size, -1, -1) # (B x T' x T')
             causal_mask = causal_mask.unsqueeze(1).expand(-1, num_heads, -1, -1) # (B x Heads x T' x T')
             causal_mask = causal_mask.reshape(batch_size * num_heads, climate_dates.size(1), climate_dates.size(1)) # (B*H, T', T')
-            
+            causal_mask = causal_mask.masked_fill(causal_mask==1, float('-inf'))          
+
             # compute climate embeddings for the entire sequence
-            climate_embeddings = self.causal_transformer_encoder(climate_data, mask=causal_mask) # (B x T' x d_model)
+            climate_embeddings = self.causal_transformer_encoder(climate_data, 
+                                                                 mask=causal_mask, 
+                                                                 is_causal=True) # (B x T' x d_model)
 
             climate_matched = []
 
