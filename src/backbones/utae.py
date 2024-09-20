@@ -168,6 +168,7 @@ class UTAE(nn.Module):
         if self.include_climate_early:
             # climate_input of shape (B x T x climate_input_dim)
             if not self.use_FILM_early:
+                print("We are concatenating...")
                 # Concatenate along the channel dimension
                 _, _, _, H, W = input.size()
                 clim_vec_expanded = climate_input.unsqueeze(-1).unsqueeze(-1)   # (B x T x climate_input_dim x 1 x 1)
@@ -176,9 +177,12 @@ class UTAE(nn.Module):
                 out = self.in_conv.smart_forward(input)                         # (B x T x C1 x H x W)
 
             else:
+                print("Applying FiLM for early fusion")
                 # Apply feature-wise linear modulation after first conv block
                 out = self.in_conv.smart_forward(input) # (B x T x C1 X H x W)
+                print("Shape of out after in_conv: ", out.shape)
                 out = self.FILM_Layer(out, climate_input, pad_mask)
+                print("Shape of out after FiLM Layer: ", out.shape)
 
         else:
             out = self.in_conv.smart_forward(input)
@@ -193,9 +197,7 @@ class UTAE(nn.Module):
         print("Shape of out: ", out.shape)
         
         if self.include_climate_mid:
-            print("Shape of climate_input: ", climate_input.shape)
             out = self.FILM_Layer(out, climate_input, pad_mask)    
-            print("Shape of out after FiLM Layer: ", out.shape)
 
         # TEMPORAL ENCODER
         out, att = self.temporal_encoder(

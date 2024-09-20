@@ -165,10 +165,14 @@ class EarlyFusionModel(nn.Module):
             causal_mask = causal_mask.reshape(batch_size * num_heads, climate_dates.size(1), climate_dates.size(1)) # (B*H, T', T')
             causal_mask = causal_mask.masked_fill(causal_mask==1, float('-inf'))          
 
+            print("causal_mask has shape: ", causal_mask.shape)
+
             # compute climate embeddings for the entire sequence
             climate_embeddings = self.causal_transformer_encoder(climate_data, 
-                                                                 mask=causal_mask, 
-                                                                 is_causal=True) # (B x T' x d_model)
+                                                                 mask=causal_mask
+                                                                 ) # (B x T' x d_model)
+
+            print("climate_embeddings have shape: ", climate_embeddings.shape)
 
             climate_matched = []
 
@@ -190,7 +194,7 @@ class EarlyFusionModel(nn.Module):
                 climate_matched.append(torch.stack(batch_climate, dim=0)) # (T x d_model)
             
             climate_matched = torch.stack(climate_matched, dim=0) # (B x T x d_model)
-
+            print("climate_matched has shape: ", climate_matched.shape)
             return climate_matched
 
         # other fusion strategies ('match_dates' or 'weekly')

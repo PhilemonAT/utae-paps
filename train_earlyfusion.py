@@ -20,7 +20,7 @@ from src.learning.miou import IoU
 from src.learning.weight_init import weight_init
 from src.backbones.fusion_models import EarlyFusionModel
 
-parser = argparse.ArgumentParser()
+parser = argparse.ArgumentParser(allow_abbrev=False)
 
 # model params
 parser.add_argument(
