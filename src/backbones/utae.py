@@ -154,7 +154,7 @@ class UTAE(nn.Module):
                                    sat_feature_dim=encoder_widths[0],
                                    hidden_dim=FILM_hidden_dim)
         elif self.include_climate_mid:
-            assert climate_dim is not None, "If use_FILM_mid is True, must specify its input dimension"
+            assert climate_dim is not None, "If include_climate_mid is True, must specify its input dimension"
             print("climate_dim: ", climate_dim)
             self.FILM_Layer = FiLM(clim_vec_dim=climate_dim,
                                    sat_feature_dim=encoder_widths[-1],
