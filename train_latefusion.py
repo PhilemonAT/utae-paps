@@ -359,7 +359,7 @@ def main(config):
 
 
         # get U-TAE model
-        utae_model = model_utils.get_model(config, mode="semantic").to(device)
+        utae_model = model_utils.get_model(config, mode="semantic", fusion=True).to(device)
 
         # initialize LateFusionModel
         model = LateFusionModel(

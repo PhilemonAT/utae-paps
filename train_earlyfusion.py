@@ -324,7 +324,7 @@ def main(config):
         
         dt_train = PASTIS_Climate_Dataset(**dt_args, folds=train_folds, cv_type=config.cv_type, class_mapping=class_mapping, cache=config.cache)
         dt_val = PASTIS_Climate_Dataset(**dt_args, folds=val_fold, cv_type=config.cv_type, class_mapping=class_mapping, cache=config.cache)
-        dt_test = PASTIS_Climate_Dataset(**dt_args, folds=test_fold, cv_type=config.cv_type)
+        dt_test = PASTIS_Climate_Dataset(**dt_args, folds=test_fold, cv_type=config.cv_type, class_mapping=class_mapping)
                 
         collate_fn = lambda x: utils.pad_collate(x, pad_value=config.pad_value)
         train_loader = data.DataLoader(
@@ -383,7 +383,7 @@ def main(config):
         print("climate_dim (the one being passed to UTAE) is: ", config.climate_dim)
 
 
-        utae_model = model_utils.get_model(config, mode="semantic").to(device)
+        utae_model = model_utils.get_model(config, mode="semantic", fusion=True).to(device)
         model = EarlyFusionModel(utae_model=utae_model, 
                                  climate_input_dim=config.climate_input_dim,
                                  d_model=config.early_fusion_dmodel,

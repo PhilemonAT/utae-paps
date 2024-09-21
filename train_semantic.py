@@ -280,7 +280,7 @@ def overall_performance(config, cv_type="official"):
 
 def main(config):
     experiment_name = config.experiment_name
-    wandb.init(project="utae_default_v_official", config=config, name=experiment_name, 
+    wandb.init(project="TEST", config=config, name=experiment_name, 
                tags=[config.run_tag, config.model_tag, config.config_tag])
     wandb.config.update(vars(config))
 
@@ -328,9 +328,35 @@ def main(config):
             sats=["S2"],
         )
 
-        dt_train = PASTIS_Dataset(**dt_args, folds=train_folds, cv_type=config.cv_type, cache=config.cache)
-        dt_val = PASTIS_Dataset(**dt_args, folds=val_fold, cv_type=config.cv_type, cache=config.cache)
-        dt_test = PASTIS_Dataset(**dt_args, folds=test_fold, cv_type=config.cv_type)
+        if config.cv_type == 'regions':
+            class_mapping = {
+                0: 0,   # keep background
+                1: 1,   # Keep class 1 unchanged
+                2: 19,
+                3: 19,
+                4: 19,
+                5: 19,
+                6: 19,
+                7: 7,   # Keep class 7 unchanged
+                8: 8,   # Keep class 8 unchanged
+                9: 19,
+                10: 10, # Keep class 10 unchanged
+                11: 19,
+                12: 12, # Keep class 12 unchanged
+                13: 19,
+                14: 14, # Keep class 14 unchanged
+                15: 19,
+                16: 19,
+                17: 19,
+                18: 19,
+                19: 19,
+            }
+        else:
+            class_mapping = None
+
+        dt_train = PASTIS_Dataset(**dt_args, folds=train_folds, cv_type=config.cv_type, class_mapping=class_mapping, cache=config.cache)
+        dt_val = PASTIS_Dataset(**dt_args, folds=val_fold, cv_type=config.cv_type, class_mapping=class_mapping, cache=config.cache)
+        dt_test = PASTIS_Dataset(**dt_args, folds=test_fold, cv_type=config.cv_type, class_mapping=class_mapping)
 
         collate_fn = lambda x: utils.pad_collate(x, pad_value=config.pad_value)
         train_loader = data.DataLoader(
