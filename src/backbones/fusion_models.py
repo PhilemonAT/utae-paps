@@ -271,12 +271,12 @@ class LateFusionModel(nn.Module):
     def __init__(self, 
                  utae_model,
                  d_model=64, 
-                 nhead=4, 
-                 d_ffn=128, 
-                 num_layers=1, 
+                 nhead_climate_transformer=4, 
+                 d_ffn_climate_transformer=128, 
+                 num_layers_climate_transformer=1, 
                  out_conv=[32, 32, 20],
                  climate_input_dim=11,
-                 use_FILM=False):
+                 use_FILM_late=False):
         """
         Initializes the LateFusionModel which combines satellite image time series and 
         climate data at a later stage in the network. The model uses a U-TAE model for 
@@ -297,19 +297,19 @@ class LateFusionModel(nn.Module):
         
         self.utae_model = utae_model
         self.d_model = d_model
-        self.use_FILM = use_FILM
+        self.use_FILM_late = use_FILM_late
 
         # Use the ClimateTransformerEncoder for climate data encoding
         self.climate_transformer_encoder = ClimateTransformerEncoder(
             climate_input_dim=climate_input_dim, 
             d_model=d_model, 
-            nhead=nhead, 
-            d_ffn=d_ffn, 
-            num_layers=num_layers,
+            nhead=nhead_climate_transformer, 
+            d_ffn=d_ffn_climate_transformer, 
+            num_layers=num_layers_climate_transformer,
             use_cls_token=True
         )
 
-        if use_FILM:
+        if use_FILM_late:
             input_dim = self.utae_model.decoder_widths[0]
             self.FILM_layer = FiLM(clim_vec_dim=d_model,
                                    sat_feature_dim=input_dim)
@@ -372,7 +372,7 @@ class LateFusionModel(nn.Module):
         # Process climate data with the transformer encoder
         climate_embedding = self.climate_transformer_encoder(input_clim)  # (B x d_model)
 
-        if self.use_FILM:
+        if self.use_FILM_late:
             combined_features = self.FILM_layer(satellite_features, climate_embedding)
 
         else:

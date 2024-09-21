@@ -21,7 +21,7 @@ from src.learning.miou import IoU
 from src.learning.weight_init import weight_init
 
 
-parser = argparse.ArgumentParser()
+parser = argparse.ArgumentParser(allow_abbrev=False)
 
 # model params
 parser.add_argument(
@@ -44,18 +44,20 @@ parser.add_argument("--d_model", default=256, type=int)
 parser.add_argument("--d_k", default=4, type=int)
 parser.add_argument("--encoder", default=True, type=bool)
 parser.add_argument("--include_climate_early", default=False, type=bool)
+parser.add_argument("--include_climate_mid", default=False, type=bool)
 parser.add_argument("--climate_dim", default=False, type=bool)
 parser.add_argument("--use_FILM_early", default=False, type=bool)
+parser.add_argument("--FILM_hidden_dim", default=128, type=int)
 
 # LateFusionModel specific parameters
 parser.add_argument("--climate_input_dim", default=11, type=int, help="Number of climate variables")
 parser.add_argument("--fusion_d_model", default=64, type=int, help="Dimension of the model for climate data")
-parser.add_argument("--fusion_nhead", default=4, type=int, help="Number of heads in the transformer")
-parser.add_argument("--fusion_num_layers", default=1, type=int, help="Number of transformer layers")
-parser.add_argument("--fusion_d_ffn", default=128, type=int, help="Dimension of the feedforward network in the transformer")
+parser.add_argument("--nhead_climate_transformer", default=4, type=int, help="Number of heads in the transformer")
+parser.add_argument("--num_layers_climate_transformer", default=1, type=int, help="Number of transformer layers")
+parser.add_argument("--d_ffn_climate_transformer", default=128, type=int, help="Dimension of the feedforward network in the transformer")
 parser.add_argument("--apply_noise", default=True, type=bool, help="Apply Gaussian noise to the data as augmentation")
 parser.add_argument("--noise_std", default=0.01, type=float, help="Standard deviation for Gaussian noise")
-parser.add_argument("--use_FILM", default=False, type=bool, help="Whether to use Feature-wise Linear Modulation (FiLM) for 1D-2D fusion")
+parser.add_argument("--use_FILM_late", default=False, type=bool, help="Whether to use Feature-wise Linear Modulation (FiLM) for 1D-2D fusion")
 
 # Set-up parameters
 parser.add_argument("--dataset_folder", default="", type=str, help="Path to the dataset folder")
@@ -363,12 +365,12 @@ def main(config):
         model = LateFusionModel(
             utae_model=utae_model,
             d_model=config.fusion_d_model,
-            nhead=config.fusion_nhead,
-            d_ffn=config.fusion_d_ffn,
-            num_layers=config.fusion_num_layers,
+            nhead_climate_transformer=config.nhead_climate_transformer,
+            d_ffn_climate_transformer=config.d_ffn_climate_transformer,
+            num_layers_climate_transformer=config.num_layers_climate_transformer,
             out_conv=config.out_conv,
             climate_input_dim=config.climate_input_dim,
-            use_FILM=config.use_FILM,
+            use_FILM_late=config.use_FILM_late,
         ).to(device)
 
         config.N_params = utils.get_ntrainparams(model)
