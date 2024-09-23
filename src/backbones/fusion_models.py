@@ -20,7 +20,7 @@ class ClimateTransformerEncoder(nn.Module):
                  nhead=4,
                  d_ffn=128,
                  num_layers=1,
-                 use_cls_token=True,
+                 use_cls_token=False,
                  max_length=5000):
         super(ClimateTransformerEncoder, self).__init__()
         
@@ -29,7 +29,8 @@ class ClimateTransformerEncoder(nn.Module):
         self.use_cls_token = use_cls_token
 
         if use_cls_token:
-            self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
+            self.cls_token = torch.randn(1, 1, d_model)
+            # self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
 
         transformer_layer = TransformerEncoderLayer(
             d_model=d_model,
@@ -268,7 +269,7 @@ class LateFusionModel(nn.Module):
                  d_model=64, 
                  nhead_climate_transformer=4, 
                  d_ffn_climate_transformer=128, 
-                 num_layers_climate_transformer=1, 
+                 num_layers_climate_transformer=2, 
                  out_conv=[32, 32, 20],
                  climate_input_dim=11,
                  use_FILM_late=False):
@@ -445,10 +446,12 @@ class FiLM(nn.Module):
         """
         
         self.mlp = nn.Sequential(
-            nn.Linear(clim_vec_dim, hidden_dim),
+            nn.Linear(clim_vec_dim, hidden_dim * 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim * 2, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 2 * sat_feature_dim), # outputs both gamma and beta
-            nn.Sigmoid()                                # since we are only working with standardized data
+            # nn.Sigmoid()                                # since we are only working with standardized data
         )
 
     def forward(self, sat_features, clim_vec):
