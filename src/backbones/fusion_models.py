@@ -29,7 +29,7 @@ class ClimateTransformerEncoder(nn.Module):
         self.use_cls_token = use_cls_token
 
         if use_cls_token:
-            self.cls_token = torch.randn(1, 1, d_model)
+            self.cls_token = nn.Parameter(torch.randn(1, 1, d_model))
             # self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
 
         transformer_layer = TransformerEncoderLayer(
