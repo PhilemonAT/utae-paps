@@ -27,7 +27,9 @@ def get_model(config, mode="semantic", fusion=None):
                     include_climate_mid=config.include_climate_mid,
                     climate_dim=config.climate_dim,
                     use_FILM_early=config.use_FILM_early,
+                    use_FILM_encoder=config.use_FILM_encoder,
                     FILM_hidden_dim=config.FILM_hidden_dim,
+                    residual_FILM=config.residual_FILM,
                 )
             else:
                 model = utae.UTAE(

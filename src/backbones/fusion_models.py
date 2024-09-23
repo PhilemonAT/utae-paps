@@ -272,7 +272,8 @@ class LateFusionModel(nn.Module):
                  num_layers_climate_transformer=2, 
                  out_conv=[32, 32, 20],
                  climate_input_dim=11,
-                 use_FILM_late=False):
+                 use_FILM_late=False,
+                 residual_FILM_late=False):
         """
         Initializes the LateFusionModel which combines satellite image time series and 
         climate data at a later stage in the network. The model uses a U-TAE model for 
@@ -294,6 +295,7 @@ class LateFusionModel(nn.Module):
         self.utae_model = utae_model
         self.d_model = d_model
         self.use_FILM_late = use_FILM_late
+        self.residual_FILM_late = residual_FILM_late
 
         # Use the ClimateTransformerEncoder for climate data encoding
         self.climate_transformer_encoder = ClimateTransformerEncoder(
@@ -369,7 +371,8 @@ class LateFusionModel(nn.Module):
         climate_embedding = self.climate_transformer_encoder(input_clim)  # (B x d_model)
 
         if self.use_FILM_late:
-            combined_features = self.FILM_layer(satellite_features, climate_embedding)
+            combined_features = self.FILM_layer(satellite_features, climate_embedding, 
+                                                residual=self.residual_FILM_late)
 
         else:
             # Expand climate embedding to match spatial dimension
@@ -454,7 +457,7 @@ class FiLM(nn.Module):
             # nn.Sigmoid()                                # since we are only working with standardized data
         )
 
-    def forward(self, sat_features, clim_vec):
+    def forward(self, sat_features, clim_vec, residual=False):
         """
         Applies FiLM modulation to satellite features using climate vector.
 
@@ -479,6 +482,9 @@ class FiLM(nn.Module):
         gamma = gamma.unsqueeze(-1).unsqueeze(-1)   # (B x decoder_widths[0] x 1 x 1)
         beta = beta.unsqueeze(-1).unsqueeze(-1)     # (B x decoder_widths[0] x 1 x 1)
 
-        modulated_features = gamma * sat_features + beta
+        if residual:
+            modulated_features = sat_features + (gamma * sat_features + beta)
+        else:
+            modulated_features = gamma * sat_features + beta
 
         return modulated_features # (B x T x C x H x W)

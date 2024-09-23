@@ -45,8 +45,11 @@ parser.add_argument("--encoder", default=False, type=bool)
 parser.add_argument("--include_climate_early", default=False, type=bool)
 parser.add_argument("--include_climate_mid", default=False, type=bool)
 parser.add_argument("--use_FILM_early", default=False, type=bool)
+parser.add_argument("--use_FILM_encoder", default=False, type=bool)
 parser.add_argument("--climate_input_dim", default=11)
+parser.add_argument("--residual_FILM", default=False, type=bool)
 parser.add_argument("--FILM_hidden_dim", default=128)
+
 
 # EarlyFusionModel specific parameters
 parser.add_argument("--early_fusion_dmodel", default=64, type=int)
