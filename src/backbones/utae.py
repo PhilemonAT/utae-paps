@@ -160,8 +160,9 @@ class UTAE(nn.Module):
                                    hidden_dim=FILM_hidden_dim)
         
         # Modulate features with climate data using FiLM at every step of the spatial encoder (also after first conv block)
-        elif self.include_climate_early and use_FILM_encoder:
+        if self.include_climate_early and use_FILM_encoder:
             assert climate_dim is not None, "If use_FILM_encoder is True, must specify its input dimension"
+            # After every down convblock
             self.film_layers = nn.ModuleList(
                 FiLM(clim_vec_dim=climate_dim,
                      sat_feature_dim=encoder_widths[i + 1],
