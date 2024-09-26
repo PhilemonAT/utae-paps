@@ -27,7 +27,7 @@ parser.add_argument(
     "--model",
     default="utae",
     type=str,
-    help="Type of architecture to use. Can be one of: (utae/unet3d/fpn/convlstm/convgru/uconvlstm/buconvlstm)",
+    help="Type of architecture to use. Can be one of: (utae/utae_ef/utae_mf/utae_encf/unet3d/fpn/convlstm/convgru/uconvlstm/buconvlstm)",
 )
 parser.add_argument("--input_dim", default=10, type=int)
 parser.add_argument("--encoder_widths", default="[64,64,64,128]", type=str)
@@ -42,14 +42,9 @@ parser.add_argument("--n_head", default=16, type=int)
 parser.add_argument("--d_model", default=256, type=int)
 parser.add_argument("--d_k", default=4, type=int)
 parser.add_argument("--encoder", default=False, type=bool)
-parser.add_argument("--include_climate_early", default=False, type=bool)
-parser.add_argument("--include_climate_mid", default=False, type=bool)
-parser.add_argument("--use_FILM_early", default=False, type=bool)
-parser.add_argument("--use_FILM_encoder", default=False, type=bool)
 parser.add_argument("--climate_input_dim", default=11)
-parser.add_argument("--residual_FILM", default=False, type=bool)
-parser.add_argument("--FILM_hidden_dim", default=128)
-
+parser.add_argument("--fusion_style", default="film")
+parser.add_argument("--residual_film", default=False, type=bool)
 
 # EarlyFusionModel specific parameters
 parser.add_argument("--early_fusion_dmodel", default=64, type=int)
@@ -58,7 +53,6 @@ parser.add_argument("--use_climate_mlp", default=False, type=bool, help="Whether
 parser.add_argument("--nhead_climate_transformer", default=4, type=int)
 parser.add_argument("--d_ffn_climate_transformer", default=128, type=int)
 parser.add_argument("--num_layers_climate_transformer", default=1, type=int)
-
 
 # Set-up parameters
 parser.add_argument("--dataset_folder", default="", type=str, help="Path to the dataset folder")

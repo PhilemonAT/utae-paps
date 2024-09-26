@@ -47,6 +47,7 @@ parser.add_argument("--include_climate_early", default=False, type=bool)
 parser.add_argument("--include_climate_mid", default=False, type=bool)
 parser.add_argument("--climate_dim", default=False, type=bool)
 parser.add_argument("--use_FILM_early", default=False, type=bool)
+parser.add_argument("--use_FILM_encoder", default=False, type=bool)
 parser.add_argument("--residual_FILM_late", default=False, type=bool)
 parser.add_argument("--FILM_hidden_dim", default=128, type=int)
 

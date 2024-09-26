@@ -10,7 +10,13 @@ from src.backbones.convlstm import ConvLSTM, BConvLSTM
 from src.backbones.ltae import LTAE2d
 
 
-class UTAE(nn.Module):
+class UTAE_Fusion(nn.Module):
+    """
+    UTAE-Early Fusion Model
+
+    add parameter 'fusion_style' which can be in {"film", "concat"}. Can add others later if required
+
+    """
     def __init__(
         self,
         input_dim,
@@ -29,13 +35,10 @@ class UTAE(nn.Module):
         return_maps=False,
         pad_value=-1000,
         padding_mode="reflect",
-        include_climate_early=False,
-        include_climate_mid=False,
         climate_dim=None,
-        use_FILM_early=False,
-        use_FILM_encoder=False,
-        residual_FILM=False,
-        FILM_hidden_dim=128
+        fusion_location=1,
+        fusion_style="film",
+        residual_film=False,
     ):
         """
         U-TAE architecture for spatio-temporal encoding of satellite image time series.
@@ -70,14 +73,16 @@ class UTAE(nn.Module):
             return_maps (bool): If true, the feature maps instead of the class scores are returned (default False)
             pad_value (float): Value used by the dataloader for temporal padding.
             padding_mode (str): Spatial padding strategy for convolutional layers (passed to nn.Conv2d).
-            include_climate_early (bool): If true, fuses climate data with satellite data after first conv block.
-            include_climate_mid (bool): If true, fuses climate data with satellite data at lowest resolution.
-                Note: for this, we always apply FiLM to keep channel dimensions consistent.
             climate_dim (int): The dimension of the climate data processed by the EarlyFusionModel 
-            use_FILM_early (bool): If true, uses feature-wise linear modulation (FiLM) to fuse climate data with satellite data. 
-                             Default (False): concatenates climate data along the channel dimension of the satellite data.
+            fusion_location (int): One of {1, 2, 3, 4} corresponding to 
+                                    - early fusion (after the first conv block);
+                                    - fusion along the entire encoder;
+                                    - mid fusion (at the lowest resolution);
+                                    - late fusion (after the decoder, before class assignments)
+            fusion_style (str): One of {"film", "concat"}. Default is film (feature-wise linear modulation)
+            residual_film (bool): Whether to use residual connection in the FiLM layer
         """
-        super(UTAE, self).__init__()
+        super(UTAE_Fusion, self).__init__()
         self.n_stages = len(encoder_widths)
         self.return_maps = return_maps
         self.encoder_widths = encoder_widths
@@ -91,14 +96,9 @@ class UTAE(nn.Module):
         self.pad_value = pad_value
         self.encoder = encoder
         
-        self.include_climate_early = include_climate_early
-        self.include_climate_mid = include_climate_mid
-        
-        assert not (include_climate_mid and include_climate_early), "Can only choose one of: include_climate_early, include_climate_mid"
-
-        self.use_FILM_early = use_FILM_early
-        self.use_FILM_encoder = use_FILM_encoder
-        self.residual_FILM = residual_FILM
+        self.fusion_location = fusion_location
+        self.fusion_style = fusion_style
+        self.residual_film = residual_film
 
         if encoder:
             self.return_maps = True
@@ -152,58 +152,33 @@ class UTAE(nn.Module):
         self.temporal_aggregator = Temporal_Aggregator(mode=agg_mode)
         self.out_conv = ConvBlock(nkernels=[decoder_widths[0]] + out_conv, padding_mode=padding_mode)
 
-        # Modulate features with climate data using FiLM at the beginning after the first conv block only
-        if self.include_climate_early and use_FILM_early:
-            assert climate_dim is not None, "If use_FILM_early is True, must specify its input dimension"
-            self.FILM_Layer = FiLM(clim_vec_dim=climate_dim,
+        # Initialize FiLM-Layer depending on fusion_style
+        if fusion_style=="film":
+            # Modulate features with climate data using FiLM at the beginning after the first conv block only
+            assert climate_dim is not None, "If using FiLM as fusion type, must specify its input dimension"
+            self.FiLM_Layer = FiLM(clim_vec_dim=climate_dim,
                                    sat_feature_dim=encoder_widths[0],
-                                   hidden_dim=FILM_hidden_dim)
-        
-        # Modulate features with climate data using FiLM at every step of the spatial encoder (also after first conv block)
-        if self.include_climate_early and use_FILM_encoder:
-            assert climate_dim is not None, "If use_FILM_encoder is True, must specify its input dimension"
-            # After every down convblock
-            self.film_layers = nn.ModuleList(
-                FiLM(clim_vec_dim=climate_dim,
-                     sat_feature_dim=encoder_widths[i + 1],
-                     hidden_dim=FILM_hidden_dim
-                     )
-                for i in range(self.n_stages - 1)
-            )
-
-        # Modulate features with climate data using FiLM at the lowest resolution only
-        elif self.include_climate_mid:
-            assert climate_dim is not None, "If include_climate_mid is True, must specify its input dimension"
-            # print("climate_dim: ", climate_dim)
-            self.FILM_Layer = FiLM(clim_vec_dim=climate_dim,
-                                   sat_feature_dim=encoder_widths[-1],
-                                   hidden_dim=FILM_hidden_dim)
-
+                                   hidden_dim=encoder_widths[0]*2)
+            
     def forward(self, input, climate_input=None, batch_positions=None, return_att=False):
         pad_mask = (
             (input == self.pad_value).all(dim=-1).all(dim=-1).all(dim=-1)
         )  # BxT pad mask
 
-        if self.include_climate_early:
-            # climate_input of shape (B x T x climate_input_dim)
-            if not self.use_FILM_early:
-                # Concatenate along the channel dimension
-                _, _, _, H, W = input.size()
-                clim_vec_expanded = climate_input.unsqueeze(-1).unsqueeze(-1)   # (B x T x climate_input_dim x 1 x 1)
-                clim_vec_expanded = clim_vec_expanded.expand(-1, -1, -1, H, W)  # (B x T x climate_input_dim x H x W)
-                input = torch.cat((input, clim_vec_expanded), dim=2)            # (B x T x (C + climate_input_dim) x H x W)
-                out = self.in_conv.smart_forward(input)                         # (B x T x C1 x H x W)
-
-            else:
-                # Apply feature-wise linear modulation after first conv block
-                out = self.in_conv.smart_forward(input) # (B x T x C1 X H x W)
-                out = self.FILM_Layer(sat_features=out, 
-                                      clim_vec=climate_input,
-                                      residual=self.residual_FILM,
-                                      pad_mask=pad_mask)
-
+        if self.fusion_style=='film':
+            # Apply feature-wise linear modulation after first conv block
+            out = self.in_conv.smart_forward(input) # (B x T x C1 X H x W)
+            out = self.FiLM_Layer(sat_features=out,
+                                  clim_vec=climate_input,
+                                  residual=self.residual_film,
+                                  pad_mask=pad_mask)
         else:
-            out = self.in_conv.smart_forward(input)
+            # Fallback option is always concat
+            _, _, _, H, W = input.size()
+            clim_vec_expanded = climate_input.unsqueeze(-1).unsqueeze(-1)   # (B x T x climate_input_dim x 1 x 1)
+            clim_vec_expanded = clim_vec_expanded.expand(-1, -1, -1, H, W)  # (B x T x climate_input_dim x H x W)
+            input = torch.cat((input, clim_vec_expanded), dim=2)            # (B x T x (C + climate_input_dim) x H x W)
+            out = self.in_conv.smart_forward(input)                         # (B x T x C1 x H x W)
 
         feature_maps = [out]
 
@@ -213,12 +188,6 @@ class UTAE(nn.Module):
             if self.use_FILM_encoder:
                 out = self.film_layers[i](out, climate_input, self.residual_FILM, pad_mask)
             feature_maps.append(out)
-       
-        if self.include_climate_mid:
-            out = self.FILM_Layer(sat_features=out, 
-                                  clim_vec=climate_input,
-                                  residual=self.residual_FILM,
-                                  pad_mask=pad_mask)
         
         # TEMPORAL ENCODER
         out, att = self.temporal_encoder(
@@ -245,6 +214,9 @@ class UTAE(nn.Module):
                 return out, maps
             else:
                 return out
+
+
+
 
 
 class TemporallySharedBlock(nn.Module):
@@ -689,7 +661,6 @@ class FiLM(nn.Module):
             nn.Linear(hidden_dim * 2, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 2 * sat_feature_dim), # outputs both gamma and beta
-            # nn.Sigmoid()                              # since we are only working with standardized data
         )
 
     def forward(self, sat_features, clim_vec, residual=False, pad_mask=None):

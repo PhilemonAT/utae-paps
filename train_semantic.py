@@ -45,7 +45,6 @@ parser.add_argument("--encoder_norm", default="group", type=str)
 parser.add_argument("--n_head", default=16, type=int)
 parser.add_argument("--d_model", default=256, type=int)
 parser.add_argument("--d_k", default=4, type=int)
-parser.add_argument("--encoder", default=False, type=bool)
 
 # Set-up parameters
 parser.add_argument(
