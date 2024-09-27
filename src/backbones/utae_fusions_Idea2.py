@@ -21,6 +21,7 @@ class UTAE_Fusion(nn.Module):
     def __init__(
         self,
         input_dim,
+        climate_input_dim,
         encoder_widths=[64, 64, 64, 128],
         decoder_widths=[32, 32, 64, 128],
         out_conv=[32, 20],
@@ -38,7 +39,6 @@ class UTAE_Fusion(nn.Module):
         padding_mode="reflect",
         matching_type='causal',
         use_climate_mlp=False,
-        climate_dim=None,
         fusion_location=1,
         fusion_style="film",
         residual_film=False,
@@ -108,9 +108,10 @@ class UTAE_Fusion(nn.Module):
         self.fusion_location = fusion_location
         self.fusion_style = fusion_style
         self.residual_film = residual_film
-        self.climate_dim = climate_dim
 
+        # ------------------------------------------------------------------------------------------
         # check that only valid specifications provided
+        # ------------------------------------------------------------------------------------------
         if not fusion_location in [1, 2, 3, 4]:
             raise NotImplementedError(f"fusion_location: {fusion_location} not valid")
         if not fusion_style in ["film", "concat"]:
@@ -128,18 +129,31 @@ class UTAE_Fusion(nn.Module):
         else:
             decoder_widths = encoder_widths
 
-
-        # Initalize classes to process and match climate data to satellite data depending on (early) fusion strategy
+        # ------------------------------------------------------------------------------------------
+        # Initalize classes to process and match climate data to satellite data depending on 
+        # (early) fusion strategy
+        # ------------------------------------------------------------------------------------------
         if fusion_location in [1, 2, 3]:
-            self.matchclimate = PrepareMatchedDataEarly(matching_type=matching_type,
+            self.matchclimate = PrepareMatchedDataEarly(climate_input_dim=climate_input_dim,
+                                                        matching_type=matching_type,
                                                         use_climate_mlp=use_climate_mlp)
+            self.climate_dim = self.matchclimate.climate_dim
+
+        elif fusion_location==4:
+            self.climate_transformer_encoder = ClimateTransformerEncoder(climate_input_dim=climate_input_dim,
+                                                                         use_cls_token=True)
+            self.climate_dim = self.climate_transformer_encoder.d_model
+
+        # ------------------------------------------------------------------------------------------
+        # Determine input_dim to in_conv based on fusion strategy applied
+        # ------------------------------------------------------------------------------------------
+        if (fusion_location==1): # early fusion
+            if fusion_style=='concat':
+                input_dim = input_dim + climate_dim
             
-        # Determine input_dim to UTAE based on fusion strategy applied
-        if (fusion_location==1) or (fusion_location==2):
-            pass
-
-
-
+        # ------------------------------------------------------------------------------------------
+        # Instantiate UTAE architecture
+        # ------------------------------------------------------------------------------------------
         self.in_conv = ConvBlock(
             nkernels=[input_dim] + [encoder_widths[0], encoder_widths[0]],
             pad_value=pad_value,
@@ -181,11 +195,25 @@ class UTAE_Fusion(nn.Module):
             d_k=d_k,
         )
         self.temporal_aggregator = Temporal_Aggregator(mode=agg_mode)
-        self.out_conv = ConvBlock(nkernels=[decoder_widths[0]] + out_conv, padding_mode=padding_mode)
+
+        # ------------------------------------------------------------------------------------------
+        # Determine input dimension to out_conv based on fusion_strategy applied
+        # ------------------------------------------------------------------------------------------
+        nkernels_out = [decoder_widths[0]] + out_conv
+        if (fusion_location==4): # late fusion
+            if fusion_style=="concat":
+                nkernels_out = [decoder_widths[0] + self.climate_dim] + out_conv
+            
+        # ------------------------------------------------------------------------------------------
+        # Instantiate last convolutional block, which maps channels to number of classes
+        # ------------------------------------------------------------------------------------------
+        self.out_conv = ConvBlock(nkernels=nkernels_out, padding_mode=padding_mode)
         
+        # ------------------------------------------------------------------------------------------
         # Initialize FiLM-Layer depending on fusion_style
+        # ------------------------------------------------------------------------------------------
         if fusion_style=="film":
-            assert self.climate_dim is not None, "If using FiLM as fusion type, must specify its input dimension"
+            assert self.climate_dim is not None, "input dimension to FiLM not known"
             if fusion_location==1: # Early Fusion
                 self.FiLM_Layer = FiLM(clim_vec_dim=self.climate_dim,
                                        sat_feature_dim=encoder_widths[0],
@@ -202,29 +230,35 @@ class UTAE_Fusion(nn.Module):
                                        sat_feature_dim=encoder_widths[-1],
                                        hidden_dim=2*encoder_widths[0])
             elif fusion_location==4: # Late Fusion
-                pass
+                self.FiLM_Layer = FiLM(clim_vec_dim=self.climate_dim,
+                                       sat_feature_dim=decoder_widths[0])
 
-            
-    def forward(self, input, climate_input=None, batch_positions=None, return_att=False):
+    def forward(self, input, sat_dates, climate_input, climate_dates, batch_positions=None, return_att=False):
+        """
+        climate_input: original, untransformed climate data (B x T' x V)
+        """
         pad_mask = (
             (input == self.pad_value).all(dim=-1).all(dim=-1).all(dim=-1)
         )  # BxT pad mask
-
-
+        
         if self.fusion_location==1:
+            climate_matched = self.matchclimate.transform_climate_data(sat_data=input,
+                                                                       sat_dates=sat_dates,
+                                                                       climate_data=climate_input,
+                                                                       climate_dates=climate_dates) # (B x T x V) or (B x T x d_model) if causal or MLP applied
             if self.fusion_style=="film":
                 # Apply feature-wise linear modulation after first conv block
                 out = self.in_conv.smart_forward(input) # (B x T x C1 X H x W)
                 out = self.FiLM_Layer(sat_features=out,
-                                    clim_vec=climate_input,
-                                    residual=self.residual_film,
-                                    pad_mask=pad_mask)
+                                      clim_vec=climate_matched,
+                                      residual=self.residual_film,
+                                      pad_mask=pad_mask)
             else:
                 # Fallback option is always concat
                 _, _, _, H, W = input.size()
-                clim_vec_expanded = climate_input.unsqueeze(-1).unsqueeze(-1)   # (B x T x climate_input_dim x 1 x 1)
-                clim_vec_expanded = clim_vec_expanded.expand(-1, -1, -1, H, W)  # (B x T x climate_input_dim x H x W)
-                input = torch.cat((input, clim_vec_expanded), dim=2)            # (B x T x (C + climate_input_dim) x H x W)
+                clim_vec_expanded = climate_matched.unsqueeze(-1).unsqueeze(-1)   # (B x T x climate_dim x 1 x 1)
+                clim_vec_expanded = clim_vec_expanded.expand(-1, -1, -1, H, W)  # (B x T x climate_dim x H x W)
+                input = torch.cat((input, clim_vec_expanded), dim=2)            # (B x T x (C + climate_dim) x H x W)
                 out = self.in_conv.smart_forward(input)                         # (B x T x C1 x H x W)
         else:
             out = self.in_conv.smart_forward(input)
@@ -736,6 +770,7 @@ class PrepareMatchedDataEarly(nn.Module):
         self.matching_type = matching_type
         self.use_climate_mlp = use_climate_mlp
         self.pad_value = self.utae_model.pad_value
+        self.climate_dim = climate_input_dim # The processed dimension of the climate data, used later in UTAE
 
         if use_climate_mlp:
             self.climate_mlp = nn.Sequential(
@@ -743,7 +778,7 @@ class PrepareMatchedDataEarly(nn.Module):
                 nn.ReLU(),
                 nn.Linear(mlp_hidden_dim, d_model)
             )
-            climate_input_dim = d_model # if we processed climate data with MLP, input dim. will be of size d_model
+            self.climate_dim = d_model # if we processed climate data with MLP, climate dim. will be of size d_model
 
         if matching_type == 'causal':
             assert use_climate_mlp == False, "Using climate MLP with causal fusion not implemented"
@@ -756,7 +791,9 @@ class PrepareMatchedDataEarly(nn.Module):
                 num_layers=num_layers_climate_transformer,
                 use_cls_token=False # not using CLS token; need per time step embeddings
             )
-                    
+            self.climate_dim = d_model  # if we used causal transformer for climate data, climate dim. will be of size d_model
+        
+
     def transform_climate_data(self, sat_data, sat_dates, climate_data, climate_dates):
         """
         Fuses satellite and climate data based on the chosen fusion strategy.
@@ -909,6 +946,7 @@ class ClimateTransformerEncoder(nn.Module):
         self.climate_projection = nn.Linear(climate_input_dim, d_model)
         self.positional_encoding = PositionalEncoding(d_model=d_model, max_length=max_length)
         self.use_cls_token = use_cls_token
+        self.d_model = d_model
 
         if use_cls_token:
             self.cls_token = nn.Parameter(torch.randn(1, 1, d_model))
