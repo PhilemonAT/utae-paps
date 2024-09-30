@@ -1,4 +1,5 @@
-from src.backbones import utae_fusions_Idea2, utae, unet3d, convlstm, convgru, fpn
+from backbones import utae_fusion
+from src.backbones import utae, unet3d, convlstm, convgru, fpn
 #from src.panoptic import paps
 
 
@@ -6,8 +7,9 @@ def get_model(config, mode="semantic", fusion=None):
     if mode == "semantic":
         if config.model == "utae":
             if fusion is not None:
-                model = utae_fusions_Idea2.UTAE_Fusion(
+                model = utae_fusion.UTAE_Fusion(
                     input_dim=10,
+                    climate_input_dim=config.climate_input_dim,
                     encoder_widths=config.encoder_widths,
                     decoder_widths=config.decoder_widths,
                     out_conv=config.out_conv,

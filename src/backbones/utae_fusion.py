@@ -3,6 +3,7 @@ U-TAE Implementation
 Author: Vivien Sainte Fare Garnot (github/VSainteuf)
 License: MIT
 """
+import math
 import torch
 import torch.nn as nn
 
@@ -136,7 +137,8 @@ class UTAE_Fusion(nn.Module):
         if fusion_location in [1, 2, 3]:
             self.matchclimate = PrepareMatchedDataEarly(climate_input_dim=climate_input_dim,
                                                         matching_type=matching_type,
-                                                        use_climate_mlp=use_climate_mlp)
+                                                        use_climate_mlp=use_climate_mlp,
+                                                        pad_value=pad_value)
             self.climate_dim = self.matchclimate.climate_dim
 
         elif fusion_location==4:
@@ -149,8 +151,8 @@ class UTAE_Fusion(nn.Module):
         # ------------------------------------------------------------------------------------------
         if (fusion_location==1): # early fusion
             if fusion_style=='concat':
-                input_dim = input_dim + climate_dim
-            
+                input_dim = input_dim + self.climate_dim
+
         # ------------------------------------------------------------------------------------------
         # Instantiate UTAE architecture
         # ------------------------------------------------------------------------------------------
@@ -203,7 +205,7 @@ class UTAE_Fusion(nn.Module):
         if (fusion_location==4): # late fusion
             if fusion_style=="concat":
                 nkernels_out = [decoder_widths[0] + self.climate_dim] + out_conv
-            
+        
         # ------------------------------------------------------------------------------------------
         # Instantiate last convolutional block, which maps channels to number of classes
         # ------------------------------------------------------------------------------------------
@@ -241,11 +243,12 @@ class UTAE_Fusion(nn.Module):
             (input == self.pad_value).all(dim=-1).all(dim=-1).all(dim=-1)
         )  # BxT pad mask
         
-        if self.fusion_location==1:
+        if self.fusion_location in [1, 2, 3]:
             climate_matched = self.matchclimate.transform_climate_data(sat_data=input,
                                                                        sat_dates=sat_dates,
                                                                        climate_data=climate_input,
                                                                        climate_dates=climate_dates) # (B x T x V) or (B x T x d_model) if causal or MLP applied
+        if self.fusion_location==1:
             if self.fusion_style=="film":
                 # Apply feature-wise linear modulation after first conv block
                 out = self.in_conv.smart_forward(input) # (B x T x C1 X H x W)
@@ -269,12 +272,12 @@ class UTAE_Fusion(nn.Module):
         for i in range(self.n_stages - 1):
             out = self.down_blocks[i].smart_forward(feature_maps[-1])
             if self.fusion_location==2:
-                out = self.film_layers[i](out, climate_input, self.residual_film, pad_mask)
+                out = self.film_layers[i](out, climate_matched, self.residual_film, pad_mask)
             feature_maps.append(out)
         
         if self.fusion_location==3:
             out = self.FiLM_Layer(sat_features=out,
-                                  clim_vec=climate_input,
+                                  clim_vec=climate_matched,
                                   residual=self.residual_film,
                                   pad_mask=pad_mask)
 
@@ -743,7 +746,8 @@ class PrepareMatchedDataEarly(nn.Module):
                  mlp_hidden_dim=64,
                  nhead_climate_transformer=4,
                  d_ffn_climate_transformer=128,
-                 num_layers_climate_transformer=1):
+                 num_layers_climate_transformer=1,
+                 pad_value=-1000):
         """
         Initializes the EarlyFusionModel, which integrates climate data into the satellite 
         data stream at an early stage before passing the combined data through the U-TAE model.
@@ -769,7 +773,7 @@ class PrepareMatchedDataEarly(nn.Module):
  
         self.matching_type = matching_type
         self.use_climate_mlp = use_climate_mlp
-        self.pad_value = self.utae_model.pad_value
+        self.pad_value = pad_value
         self.climate_dim = climate_input_dim # The processed dimension of the climate data, used later in UTAE
 
         if use_climate_mlp:
@@ -792,7 +796,6 @@ class PrepareMatchedDataEarly(nn.Module):
                 use_cls_token=False # not using CLS token; need per time step embeddings
             )
             self.climate_dim = d_model  # if we used causal transformer for climate data, climate dim. will be of size d_model
-        
 
     def transform_climate_data(self, sat_data, sat_dates, climate_data, climate_dates):
         """
@@ -1081,11 +1084,10 @@ class FiLM(nn.Module):
         Returns:
             Tensor: Modulated satellite features of shape (B x T x C x H x W)
         """
-        
         film_params = self.mlp(clim_vec)        # (B x T x 2*C)
         
         # split along last dimension
-        gamma, beta = film_params.chunk(2, dim=2)
+        gamma, beta = film_params.chunk(2, dim=-1)
 
         gamma = gamma.unsqueeze(-1).unsqueeze(-1)   # (B x T x C x 1 x 1)
         beta = beta.unsqueeze(-1).unsqueeze(-1)     # (B x T x C x 1 x 1)
