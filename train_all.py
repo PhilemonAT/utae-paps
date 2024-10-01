@@ -85,14 +85,13 @@ parser.add_argument("--config_tag", default="", type=str)
 list_args = ["encoder_widths", "decoder_widths", "out_conv"]
 parser.set_defaults(cache=False)
 
-def iterate(model, data_loader, criterion, config, optimizer=None, mode="train", device=None):
+def iterate(model, data_loader, criterion, config, optimizer=None, mode="train", return_att=False, device=None):
     loss_meter = tnt.meter.AverageValueMeter()
     iou_meter = IoU(
         num_classes=config.num_classes,
         ignore_index=config.ignore_index,
         cm_device=config.device,
     )
-
 
     t_start = time.time()
     for i, batch in enumerate(data_loader):
@@ -105,8 +104,12 @@ def iterate(model, data_loader, criterion, config, optimizer=None, mode="train",
         y = data_dict["target"]
 
         if mode != "train":
-            with torch.no_grad():
-                out = model(input_sat, dates_sat, input_clim, dates_clim, batch_positions=dates_sat, )
+            if mode == "test":
+                with torch.no_grad():
+                    out, att = model(input_sat, dates_sat, input_clim, dates_clim, batch_positions=dates_sat, return_att=return_att)
+            else:
+                with torch.no_grad():
+                    out = model(input_sat, dates_sat, input_clim, dates_clim, batch_positions=dates_sat)
         else:
             optimizer.zero_grad()
             out = model(input_sat, dates_sat, input_clim, dates_clim, batch_positions=dates_sat)
@@ -146,6 +149,8 @@ def iterate(model, data_loader, criterion, config, optimizer=None, mode="train",
     wandb.log(metrics)
 
     if mode == "test":
+        if return_att:
+            return metrics, iou_meter.conf_metric.value(), att
         return metrics, iou_meter.conf_metric.value()
     else:
         return metrics
@@ -429,13 +434,14 @@ def main(config):
             )
         model.eval()
 
-        test_metrics, conf_mat = iterate(
+        test_metrics, conf_mat, att = iterate(
             model,
             data_loader=test_loader,
             criterion=criterion,
             config=config,
             optimizer=optimizer,
             mode="test",
+            return_att=True,
             device=device,
         )
         print(
@@ -446,6 +452,22 @@ def main(config):
             )
         )
         save_results(fold + 1, test_metrics, conf_mat.cpu().numpy(), config, cv_type=config.cv_type)
+        
+        if config.cv_type=='official':
+            torch.save(
+                att,
+                os.path.join(
+                    config.res_dir, config.cv_type, "Fold_{}".format(fold + 1), "attn_map.pt"
+                )
+            )
+        else:
+            torch.save(
+                att,
+                os.path.join(
+                    config.res_dir, config.cv_type, "Region_{}".format(fold + 1), "attn_map.pt"
+                )
+            )
+
     if config.fold is None:
         overall_performance(config, cv_type=config.cv_type)
 
