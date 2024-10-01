@@ -252,10 +252,10 @@ class UTAE_Fusion(nn.Module):
             if self.fusion_style=="film":
                 # Apply feature-wise linear modulation after first conv block
                 out = self.in_conv.smart_forward(input) # (B x T x C1 X H x W)
-                out, film_params = self.FiLM_Layer(sat_features=out,
-                                                   clim_vec=climate_matched,
-                                                   residual=self.residual_film,
-                                                   pad_mask=pad_mask)
+                out = self.FiLM_Layer(sat_features=out,
+                                      clim_vec=climate_matched,
+                                      residual=self.residual_film,
+                                      pad_mask=pad_mask)
             else:
                 # Fallback option is always concat
                 _, _, _, H, W = input.size()
@@ -270,19 +270,16 @@ class UTAE_Fusion(nn.Module):
 
         # SPATIAL ENCODER
         
-        film_parameters = []
-
         for i in range(self.n_stages - 1):
             out = self.down_blocks[i].smart_forward(feature_maps[-1])
             if self.fusion_location==2:
-                out, film_params = self.film_layers[i](out, climate_matched, self.residual_film, pad_mask)
-                film_parameters[i] = film_params
+                out = self.film_layers[i](out, climate_matched, self.residual_film, pad_mask)
             feature_maps.append(out)
         
         if self.fusion_location==3:
-            out, film_params = self.FiLM_Layer(sat_features=out,
-                                               clim_vec=climate_matched,
-                                               residual=self.residual_film,pad_mask=pad_mask)
+            out = self.FiLM_Layer(sat_features=out,
+                                  clim_vec=climate_matched,
+                                  residual=self.residual_film,pad_mask=pad_mask)
 
         # TEMPORAL ENCODER
         out, att = self.temporal_encoder(
@@ -302,9 +299,9 @@ class UTAE_Fusion(nn.Module):
         if self.fusion_location==4:
             climate_embedding = self.climate_transformer_encoder(climate_input) # (B x d_model)
             if self.fusion_style=="film":
-                out, film_params = self.FiLM_Layer(sat_features=out, 
-                                                   clim_vec=climate_embedding, 
-                                                   residual=self.residual_film)
+                out = self.FiLM_Layer(sat_features=out, 
+                                      clim_vec=climate_embedding, 
+                                      residual=self.residual_film)
             else:
                 climate_embedding = climate_embedding.unsqueeze(-1).unsqueeze(-1)  # (B x d_model x 1 x 1)
                 climate_embedding = climate_embedding.expand(-1, -1, 
@@ -313,12 +310,6 @@ class UTAE_Fusion(nn.Module):
                 # Concatenate satellite features and climate embedding
                 out = torch.cat((out, climate_embedding), dim=1)
 
-        # Compute mean over gammas and betas for the different encoder fusions 
-        if self.fusion_location == 2:
-            gamma_list, beta_list = zip(*film_parameters)
-            gamma = torch.stack(gamma_list).mean(dim=0)
-            beta = torch.stack(beta_list).mean(dim=0)
-            film_params = (gamma, beta)
         
         if self.encoder:
             return out, maps
@@ -327,7 +318,7 @@ class UTAE_Fusion(nn.Module):
             if return_att:
                 return out, att
             if return_film:
-                return out, film_params
+                return out
             if self.return_maps:
                 return out, maps
             else:
@@ -1112,4 +1103,4 @@ class FiLM(nn.Module):
             padded_idx = (pad_mask==True).nonzero(as_tuple=True)
             modulated_features[padded_idx] = sat_features[padded_idx]
 
-        return modulated_features, (gamma, beta) # modulated features of shape (B x T x C x H x W)
+        return modulated_features # modulated features of shape (B x T x C x H x W)
