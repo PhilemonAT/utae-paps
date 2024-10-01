@@ -1,4 +1,4 @@
-from backbones import utae_fusion
+from src.backbones import utae_fusion
 from src.backbones import utae, unet3d, convlstm, convgru, fpn
 #from src.panoptic import paps
 

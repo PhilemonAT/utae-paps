@@ -93,6 +93,13 @@ def iterate(model, data_loader, criterion, config, optimizer=None, mode="train",
         cm_device=config.device,
     )
 
+    # To store aggregated FiLM statistics
+    gamma_sum, beta_sum = None, None
+    num_batches = 0
+
+    gammas = []
+    betas  = []
+
     t_start = time.time()
     for i, batch in enumerate(data_loader):
         data_dict = batch
@@ -105,11 +112,14 @@ def iterate(model, data_loader, criterion, config, optimizer=None, mode="train",
 
         if mode != "train":
             with torch.no_grad():
-                out = model(input_sat, dates_sat, input_clim, dates_clim, batch_positions=dates_sat)
+                out, film_params = model(input_sat, dates_sat, input_clim, dates_clim, batch_positions=dates_sat, return_film=True)
         else:
             optimizer.zero_grad()
-            out = model(input_sat, dates_sat, input_clim, dates_clim, batch_positions=dates_sat)
+            out, film_params = model(input_sat, dates_sat, input_clim, dates_clim, batch_positions=dates_sat, return_film=True)
         
+        gammas.append(film_params[0])
+        betas.append(film_params[1])
+
         loss = criterion(out, y)
         
         if mode == "train":
@@ -143,10 +153,22 @@ def iterate(model, data_loader, criterion, config, optimizer=None, mode="train",
 
     wandb.log(metrics)
 
+    # pad FiLM parameters (don't match along temporal dimension)
+    max_size = max(tensor.size(1) for tensor in gammas) # largest temporal dimension
+
+    for tensor in [gammas, betas]:
+        padding_size = max_size - tensor.size(1)
+        padded_tensor = torch.nn.functional.pad(tensor, (0, 0, 0, 0, 0, padding_size))
+
+
+    gammas = torch.stack(gammas)
+    betas = torch.stack(betas)
+    film_params = torch.cat((gammas, betas), dim=1)
+
     if mode == "test":
         return metrics, iou_meter.conf_metric.value()
     else:
-        return metrics
+        return metrics, film_params
     
 def checkpoint(fold, log, config, cv_type="official"):
     if cv_type=="official":
@@ -368,14 +390,23 @@ def main(config):
             print(f"EPOCH {epoch}/{config.epochs}")
 
             model.train()
-            train_metrics = iterate(model, train_loader, criterion, config, 
-                                    optimizer, mode="train", device=device)
+            train_metrics, train_film_params = iterate(model, train_loader, criterion, config, 
+                                                       optimizer, mode="train", device=device)
+            
+            # Save FiLM parameters for the final batch of this epoch
+            with open(os.path.join(config.res_dir, config.cv_type, f"Fold_{fold+1}_film_parameters_train_epoch_{epoch}.pkl"), 'wb') as f:
+                pkl.dump(train_film_params, f)
+
             if epoch % config.val_every == 0 and epoch > config.val_after:
                 print("Validation . . . ")
                 model.eval()
-                val_metrics = iterate(model, val_loader, criterion, config, optimizer, mode="val", device=device)
+                val_metrics, val_film_params = iterate(model, val_loader, criterion, config, optimizer, mode="val", device=device)
 
                 print(f"Loss {val_metrics['val_loss']:.4f}, Acc {val_metrics['val_accuracy']:.2f}, IoU {val_metrics['val_IoU']:.4f}")
+                
+                # Save FiLM parameters for the final batch of validation
+                with open(os.path.join(config.res_dir, config.cv_type, f"Fold_{fold+1}_film_parameters_val_epoch_{epoch}.pkl"), 'wb') as f:
+                    pkl.dump(val_film_params, f)
 
                 trainlog[epoch] = {**train_metrics, **val_metrics}
                 checkpoint(fold + 1, trainlog, config, cv_type=config.cv_type)

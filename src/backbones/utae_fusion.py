@@ -235,14 +235,14 @@ class UTAE_Fusion(nn.Module):
                 self.FiLM_Layer = FiLM(clim_vec_dim=self.climate_dim,
                                        sat_feature_dim=decoder_widths[0])
 
-    def forward(self, input, sat_dates, climate_input, climate_dates, batch_positions=None, return_att=False):
+    def forward(self, input, sat_dates, climate_input, climate_dates, batch_positions=None, return_att=False, return_film=False):
         """
         climate_input: original, untransformed climate data (B x T' x V)
         """
         pad_mask = (
             (input == self.pad_value).all(dim=-1).all(dim=-1).all(dim=-1)
         )  # BxT pad mask
-        
+
         if self.fusion_location in [1, 2, 3]:
             climate_matched = self.matchclimate.transform_climate_data(sat_data=input,
                                                                        sat_dates=sat_dates,
@@ -252,10 +252,10 @@ class UTAE_Fusion(nn.Module):
             if self.fusion_style=="film":
                 # Apply feature-wise linear modulation after first conv block
                 out = self.in_conv.smart_forward(input) # (B x T x C1 X H x W)
-                out = self.FiLM_Layer(sat_features=out,
-                                      clim_vec=climate_matched,
-                                      residual=self.residual_film,
-                                      pad_mask=pad_mask)
+                out, film_params = self.FiLM_Layer(sat_features=out,
+                                                   clim_vec=climate_matched,
+                                                   residual=self.residual_film,
+                                                   pad_mask=pad_mask)
             else:
                 # Fallback option is always concat
                 _, _, _, H, W = input.size()
@@ -269,17 +269,20 @@ class UTAE_Fusion(nn.Module):
         feature_maps = [out]
 
         # SPATIAL ENCODER
+        
+        film_parameters = []
+
         for i in range(self.n_stages - 1):
             out = self.down_blocks[i].smart_forward(feature_maps[-1])
             if self.fusion_location==2:
-                out = self.film_layers[i](out, climate_matched, self.residual_film, pad_mask)
+                out, film_params = self.film_layers[i](out, climate_matched, self.residual_film, pad_mask)
+                film_parameters[i] = film_params
             feature_maps.append(out)
         
         if self.fusion_location==3:
-            out = self.FiLM_Layer(sat_features=out,
-                                  clim_vec=climate_matched,
-                                  residual=self.residual_film,
-                                  pad_mask=pad_mask)
+            out, film_params = self.FiLM_Layer(sat_features=out,
+                                               clim_vec=climate_matched,
+                                               residual=self.residual_film,pad_mask=pad_mask)
 
         # TEMPORAL ENCODER
         out, att = self.temporal_encoder(
@@ -299,9 +302,9 @@ class UTAE_Fusion(nn.Module):
         if self.fusion_location==4:
             climate_embedding = self.climate_transformer_encoder(climate_input) # (B x d_model)
             if self.fusion_style=="film":
-                out = self.FiLM_Layer(sat_features=out, 
-                                      clim_vec=climate_embedding, 
-                                      residual=self.residual_film)
+                out, film_params = self.FiLM_Layer(sat_features=out, 
+                                                   clim_vec=climate_embedding, 
+                                                   residual=self.residual_film)
             else:
                 climate_embedding = climate_embedding.unsqueeze(-1).unsqueeze(-1)  # (B x d_model x 1 x 1)
                 climate_embedding = climate_embedding.expand(-1, -1, 
@@ -310,17 +313,25 @@ class UTAE_Fusion(nn.Module):
                 # Concatenate satellite features and climate embedding
                 out = torch.cat((out, climate_embedding), dim=1)
 
+        # Compute mean over gammas and betas for the different encoder fusions 
+        if self.fusion_location == 2:
+            gamma_list, beta_list = zip(*film_parameters)
+            gamma = torch.stack(gamma_list).mean(dim=0)
+            beta = torch.stack(beta_list).mean(dim=0)
+            film_params = (gamma, beta)
+        
         if self.encoder:
             return out, maps
         else:
             out = self.out_conv(out)
             if return_att:
                 return out, att
+            if return_film:
+                return out, film_params
             if self.return_maps:
                 return out, maps
             else:
                 return out
-
 
 class TemporallySharedBlock(nn.Module):
     """
@@ -953,7 +964,6 @@ class ClimateTransformerEncoder(nn.Module):
 
         if use_cls_token:
             self.cls_token = nn.Parameter(torch.randn(1, 1, d_model))
-            # self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model))
 
         transformer_layer = TransformerEncoderLayer(
             d_model=d_model,
@@ -1102,4 +1112,4 @@ class FiLM(nn.Module):
             padded_idx = (pad_mask==True).nonzero(as_tuple=True)
             modulated_features[padded_idx] = sat_features[padded_idx]
 
-        return modulated_features # (B x T x C x H x W)
+        return modulated_features, (gamma, beta) # modulated features of shape (B x T x C x H x W)
