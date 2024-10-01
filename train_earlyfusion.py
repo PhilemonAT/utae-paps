@@ -32,7 +32,7 @@ parser.add_argument("--input_dim", default=10, type=int)
 parser.add_argument("--climate_input_dim", default=11, type=int)
 parser.add_argument("--encoder_widths", default="[64,64,64,128]", type=str)
 parser.add_argument("--decoder_widths", default="[32,32,64,128]", type=str)
-parser.add_argument("--out_conv", default="[32, 20]", type=str)
+parser.add_argument("--out_conv", default="[32, 32, 20]", type=str)
 parser.add_argument("--str_conv_k", default=4, type=int)
 parser.add_argument("--str_conv_s", default=2, type=int)
 parser.add_argument("--str_conv_p", default=1, type=int)
@@ -192,7 +192,7 @@ def prepare_output(config, cv_type="official"):
         for fold in range(1, 6):
             os.makedirs(os.path.join(config.res_dir, cv_type, "Fold_{}".format(fold)), exist_ok=True)
     else:
-        for region in range(1, 5):
+        for region in range(1, 4):
             os.makedirs(os.path.join(config.res_dir, cv_type, "Region_{}".format(region)), exist_ok=True)
 
 def recursive_todevice(x, device):
@@ -214,7 +214,7 @@ def overall_performance(config, cv_type="official"):
                 )
             )
     else:
-        for region in range(1,5):
+        for region in range(1, 4):
             cm += pkl.load(
                 open(
                     os.path.join(config.res_dir, cv_type, "Region_{}".format(region), "conf_mat.pkl"),
@@ -249,10 +249,9 @@ def main(config):
     ]
 
     region_fold_sequence = [
-        [[1, 2], [3], [4]],
-        [[2, 3], [4], [1]],
-        [[3, 4], [1], [2]],
-        [[4, 1], [2], [3]],
+        [[1], [3], [4]],
+        [[3], [1], [4]],
+        [[4], [1], [3]],
     ]
 
     np.random.seed(config.rdm_seed)
@@ -290,25 +289,25 @@ def main(config):
 
         if config.cv_type == 'regions':
             class_mapping = {
-                0: 0,   # keep background
-                1: 1,   # Keep class 1 unchanged
-                2: 19,
-                3: 19,
-                4: 19,
-                5: 19,
-                6: 19,
-                7: 7,   # Keep class 7 unchanged
-                8: 8,   # Keep class 8 unchanged
-                9: 19,
-                10: 10, # Keep class 10 unchanged
-                11: 19,
-                12: 12, # Keep class 12 unchanged
-                13: 19,
-                14: 14, # Keep class 14 unchanged
-                15: 19,
-                16: 19,
-                17: 19,
-                18: 19,
+                0: 0,   
+                1: 1,   
+                2: 2,
+                3: 3,
+                4: 4,
+                5: 5,
+                6: 6,
+                7: 19,  # Discard class 7
+                8: 19,  # Discard class 8
+                9: 19,  # Discard class 9
+                10: 10, 
+                11: 19, # Discard class 11
+                12: 12, 
+                13: 13,
+                14: 14, 
+                15: 19, # Discard class 15
+                16: 16,
+                17: 17,
+                18: 18,
                 19: 19,
             }
         else:

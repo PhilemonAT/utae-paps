@@ -85,7 +85,7 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
             if cv_type == "official":
                 assert all(fold in range(1, 6) for fold in folds), "If cv_type='official', folds must be in the range 1 to 5."
             elif cv_type == "regions":
-                assert all(fold in range(1, 5) for fold in folds), "If cv_type='regions', folds must be in the range 1 to 4."
+                assert all(fold in [1, 3, 4] for fold in folds), "If cv_type='regions', folds must be one of [1, 3, 4]."
 
         # Select Fold samples (official PASTIS-folds or regions)
         if folds is not None:
@@ -142,7 +142,7 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
                         os.path.join(folder, "NORM_regions_{}_patch.json".format(s)), "r"
                     ) as file:
                         normvals = json.loads(file.read())
-                    selected_regions = folds if folds is not None else range(1, 5)
+                    selected_regions = folds if folds is not None else [1, 3, 4]
                     means = [normvals["Region_{}".format(f)]["mean"] for f in selected_regions]
                     stds = [normvals["Region_{}".format(f)]["std"] for f in selected_regions]
                     self.norm[s] = np.stack(means).mean(axis=0), np.stack(stds).mean(axis=0)

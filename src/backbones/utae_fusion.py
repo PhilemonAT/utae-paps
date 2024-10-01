@@ -209,7 +209,7 @@ class UTAE_Fusion(nn.Module):
         # ------------------------------------------------------------------------------------------
         # Instantiate last convolutional block, which maps channels to number of classes
         # ------------------------------------------------------------------------------------------
-        self.out_conv = ConvBlock(nkernels=nkernels_out, padding_mode=padding_mode)
+        self.out_conv = ConvBlock(nkernels=nkernels_out, padding_mode=padding_mode, last_relu=False)
         
         # ------------------------------------------------------------------------------------------
         # Initialize FiLM-Layer depending on fusion_style
@@ -310,7 +310,6 @@ class UTAE_Fusion(nn.Module):
                 # Concatenate satellite features and climate embedding
                 out = torch.cat((out, climate_embedding), dim=1)
 
-        
         if self.encoder:
             return out, maps
         else:
