@@ -237,7 +237,7 @@ class UTAE_Fusion(nn.Module):
                 self.FiLM_Layer = FiLM(clim_vec_dim=self.climate_dim,
                                        sat_feature_dim=decoder_widths[0])
 
-    def forward(self, input, sat_dates, climate_input, climate_dates, batch_positions=None, return_att=False):
+    def forward(self, input, sat_dates, climate_input, climate_dates, batch_positions=None, return_att=False, return_att_clim=False):
         """
         climate_input: original, untransformed climate data (B x T' x V)
         """
@@ -295,7 +295,6 @@ class UTAE_Fusion(nn.Module):
                                   residual=self.residual_film,pad_mask=pad_mask)
 
         # TEMPORAL ENCODER
-        print("Shape of feature_maps[-1]: ", feature_maps[-1].shape)
         out, att = self.temporal_encoder(
             feature_maps[-1], batch_positions=batch_positions, pad_mask=pad_mask
         )
@@ -329,7 +328,9 @@ class UTAE_Fusion(nn.Module):
         else:
             out = self.out_conv(out)
             if return_att:
-                return out, att, weights
+                return out, att
+            if return_att_clim:
+                return out, weights
             if self.return_maps:
                 return out, maps
             else:
@@ -912,16 +913,6 @@ class PrepareMatchedDataEarly(nn.Module):
 
 
 class ClimateTransformerEncoder(nn.Module):
-    """
-    Initializes the ClimateTransformerEncoder module.
-    Args:
-        climate_input_dim (int): Number of input features for climate data.
-        d_model (int): Dimension of the model (hidden size).
-        nhead (int): Number of attention heads.
-        d_ffn (int): Dimension of the feedforward network.
-        num_layers (int): Number of transformer encoder layers.
-        use_cls_token (bool): Whether to use a CLS token for sequence classification.
-    """
     def __init__(self, 
                  climate_input_dim=11,
                  d_model=64,
@@ -930,6 +921,16 @@ class ClimateTransformerEncoder(nn.Module):
                  num_layers=1,
                  use_cls_token=False,
                  max_length=5000):
+        """
+        Initializes the ClimateTransformerEncoder module.
+        Args:
+            climate_input_dim (int): Number of input features for climate data.
+            d_model (int): Dimension of the model (hidden size).
+            nhead (int): Number of attention heads.
+            d_ffn (int): Dimension of the feedforward network.
+            num_layers (int): Number of transformer encoder layers.
+            use_cls_token (bool): Whether to use a CLS token for sequence classification.
+        """
         super(ClimateTransformerEncoder, self).__init__()
         
         self.climate_projection = nn.Linear(climate_input_dim, d_model)
@@ -940,14 +941,14 @@ class ClimateTransformerEncoder(nn.Module):
         if use_cls_token:
             self.cls_token = nn.Parameter(torch.randn(1, 1, d_model))
 
-        transformer_layer = TransformerEncoderLayer(
+        transformer_layer = TransformerEncoderLayerWithWeights(
             d_model=d_model,
             nhead=nhead,
             dim_feedforward=d_ffn,
             batch_first=True
         )
 
-        self.climate_transformer = nn.TransformerEncoder(
+        self.climate_transformer = TransformerEncoderWithWeights(
             transformer_layer,
             num_layers=num_layers
         )
@@ -1088,7 +1089,6 @@ class FiLM(nn.Module):
             modulated_features[padded_idx] = sat_features[padded_idx]
 
         return modulated_features # modulated features of shape (B x T x C x H x W)
-    
 
 class TransformerEncoderLayerWithWeights(nn.TransformerEncoderLayer):
     def __init__(self, *args, **kwargs):
@@ -1230,6 +1230,7 @@ class TransformerEncoderLayerWithWeights(nn.TransformerEncoderLayer):
                 merged_mask, mask_type = self.self_attn.merge_masks(
                     src_mask, src_key_padding_mask, src
                 )
+                print("Now returning.")
                 return torch._transformer_encoder_layer_fwd(
                     src,
                     self.self_attn.embed_dim,

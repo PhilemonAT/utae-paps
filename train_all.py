@@ -85,7 +85,8 @@ parser.add_argument("--config_tag", default="", type=str)
 list_args = ["encoder_widths", "decoder_widths", "out_conv"]
 parser.set_defaults(cache=False)
 
-def iterate(model, data_loader, criterion, config, optimizer=None, mode="train", return_att=False, device=None):
+def iterate(model, data_loader, criterion, config, optimizer=None, 
+            mode="train", return_att_clim=False, device=None):
     loss_meter = tnt.meter.AverageValueMeter()
     iou_meter = IoU(
         num_classes=config.num_classes,
@@ -106,7 +107,8 @@ def iterate(model, data_loader, criterion, config, optimizer=None, mode="train",
         if mode != "train":
             if mode == "test":
                 with torch.no_grad():
-                    out, att = model(input_sat, dates_sat, input_clim, dates_clim, batch_positions=dates_sat, return_att=return_att)
+                    out, att = model(input_sat, dates_sat, input_clim, dates_clim, 
+                                     batch_positions=dates_sat, return_att_clim=return_att_clim)
             else:
                 with torch.no_grad():
                     out = model(input_sat, dates_sat, input_clim, dates_clim, batch_positions=dates_sat)
@@ -149,7 +151,7 @@ def iterate(model, data_loader, criterion, config, optimizer=None, mode="train",
     wandb.log(metrics)
 
     if mode == "test":
-        if return_att:
+        if return_att_clim:
             return metrics, iou_meter.conf_metric.value(), att
         return metrics, iou_meter.conf_metric.value()
     else:
@@ -441,7 +443,7 @@ def main(config):
             config=config,
             optimizer=optimizer,
             mode="test",
-            return_att=True,
+            return_att_clim=True,
             device=device,
         )
         print(
@@ -453,18 +455,20 @@ def main(config):
         )
         save_results(fold + 1, test_metrics, conf_mat.cpu().numpy(), config, cv_type=config.cv_type)
         
+        print("Shape of attention map is: ", att.shape)
+
         if config.cv_type=='official':
             torch.save(
                 att,
                 os.path.join(
-                    config.res_dir, config.cv_type, "Fold_{}".format(fold + 1), "attn_map.pt"
+                    config.res_dir, config.cv_type, "Fold_{}".format(fold + 1), "attn_clim.pt"
                 )
             )
         else:
             torch.save(
                 att,
                 os.path.join(
-                    config.res_dir, config.cv_type, "Region_{}".format(fold + 1), "attn_map.pt"
+                    config.res_dir, config.cv_type, "Region_{}".format(fold + 1), "attn_clim.pt"
                 )
             )
 
