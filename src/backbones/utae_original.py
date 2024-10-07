@@ -27,15 +27,9 @@ class UTAE(nn.Module):
         d_k=4,
         encoder=False,
         return_maps=False,
-        pad_value=-1000,
+        pad_value=0,
         padding_mode="reflect",
-        include_climate_early=False,
-        include_climate_mid=False,
-        climate_dim=None,
-        use_FILM_early=False,
-        use_FILM_encoder=False,
-        residual_FILM=False,
-        FILM_hidden_dim=128
+        last_relu=False,
     ):
         """
         U-TAE architecture for spatio-temporal encoding of satellite image time series.
@@ -70,12 +64,6 @@ class UTAE(nn.Module):
             return_maps (bool): If true, the feature maps instead of the class scores are returned (default False)
             pad_value (float): Value used by the dataloader for temporal padding.
             padding_mode (str): Spatial padding strategy for convolutional layers (passed to nn.Conv2d).
-            include_climate_early (bool): If true, fuses climate data with satellite data after first conv block.
-            include_climate_mid (bool): If true, fuses climate data with satellite data at lowest resolution.
-                Note: for this, we always apply FiLM to keep channel dimensions consistent.
-            climate_dim (int): The dimension of the climate data processed by the EarlyFusionModel 
-            use_FILM_early (bool): If true, uses feature-wise linear modulation (FiLM) to fuse climate data with satellite data. 
-                             Default (False): concatenates climate data along the channel dimension of the satellite data.
         """
         super(UTAE, self).__init__()
         self.n_stages = len(encoder_widths)
@@ -90,16 +78,6 @@ class UTAE(nn.Module):
         )
         self.pad_value = pad_value
         self.encoder = encoder
-        
-        self.include_climate_early = include_climate_early
-        self.include_climate_mid = include_climate_mid
-        
-        assert not (include_climate_mid and include_climate_early), "Can only choose one of: include_climate_early, include_climate_mid"
-
-        self.use_FILM_early = use_FILM_early
-        self.use_FILM_encoder = use_FILM_encoder
-        self.residual_FILM = residual_FILM
-
         if encoder:
             self.return_maps = True
 
@@ -150,76 +128,19 @@ class UTAE(nn.Module):
             d_k=d_k,
         )
         self.temporal_aggregator = Temporal_Aggregator(mode=agg_mode)
-        self.out_conv = ConvBlock(nkernels=[decoder_widths[0]] + out_conv, padding_mode=padding_mode)
+        self.out_conv = ConvBlock(nkernels=[decoder_widths[0]] + out_conv, padding_mode=padding_mode,
+                                  last_relu=last_relu)
 
-        # Modulate features with climate data using FiLM at the beginning after the first conv block only
-        if self.include_climate_early and use_FILM_early:
-            assert climate_dim is not None, "If use_FILM_early is True, must specify its input dimension"
-            self.FILM_Layer = FiLM(clim_vec_dim=climate_dim,
-                                   sat_feature_dim=encoder_widths[0],
-                                   hidden_dim=FILM_hidden_dim)
-        
-        # Modulate features with climate data using FiLM at every step of the spatial encoder (also after first conv block)
-        if self.include_climate_early and use_FILM_encoder:
-            assert climate_dim is not None, "If use_FILM_encoder is True, must specify its input dimension"
-            # After every down convblock
-            self.film_layers = nn.ModuleList(
-                FiLM(clim_vec_dim=climate_dim,
-                     sat_feature_dim=encoder_widths[i + 1],
-                     hidden_dim=FILM_hidden_dim
-                     )
-                for i in range(self.n_stages - 1)
-            )
-
-        # Modulate features with climate data using FiLM at the lowest resolution only
-        elif self.include_climate_mid:
-            assert climate_dim is not None, "If include_climate_mid is True, must specify its input dimension"
-            # print("climate_dim: ", climate_dim)
-            self.FILM_Layer = FiLM(clim_vec_dim=climate_dim,
-                                   sat_feature_dim=encoder_widths[-1],
-                                   hidden_dim=FILM_hidden_dim)
-
-    def forward(self, input, climate_input=None, batch_positions=None, return_att=False):
+    def forward(self, input, batch_positions=None, return_att=False):
         pad_mask = (
             (input == self.pad_value).all(dim=-1).all(dim=-1).all(dim=-1)
         )  # BxT pad mask
-
-        if self.include_climate_early:
-            # climate_input of shape (B x T x climate_input_dim)
-            if not self.use_FILM_early:
-                # Concatenate along the channel dimension
-                _, _, _, H, W = input.size()
-                clim_vec_expanded = climate_input.unsqueeze(-1).unsqueeze(-1)   # (B x T x climate_input_dim x 1 x 1)
-                clim_vec_expanded = clim_vec_expanded.expand(-1, -1, -1, H, W)  # (B x T x climate_input_dim x H x W)
-                input = torch.cat((input, clim_vec_expanded), dim=2)            # (B x T x (C + climate_input_dim) x H x W)
-                out = self.in_conv.smart_forward(input)                         # (B x T x C1 x H x W)
-
-            else:
-                # Apply feature-wise linear modulation after first conv block
-                out = self.in_conv.smart_forward(input) # (B x T x C1 X H x W)
-                out = self.FILM_Layer(sat_features=out, 
-                                      clim_vec=climate_input,
-                                      residual=self.residual_FILM,
-                                      pad_mask=pad_mask)
-
-        else:
-            out = self.in_conv.smart_forward(input)
-
+        out = self.in_conv.smart_forward(input)
         feature_maps = [out]
-
         # SPATIAL ENCODER
         for i in range(self.n_stages - 1):
             out = self.down_blocks[i].smart_forward(feature_maps[-1])
-            if self.use_FILM_encoder:
-                out = self.film_layers[i](out, climate_input, self.residual_FILM, pad_mask)
             feature_maps.append(out)
-       
-        if self.include_climate_mid:
-            out = self.FILM_Layer(sat_features=out, 
-                                  clim_vec=climate_input,
-                                  residual=self.residual_FILM,
-                                  pad_mask=pad_mask)
-        
         # TEMPORAL ENCODER
         out, att = self.temporal_encoder(
             feature_maps[-1], batch_positions=batch_positions, pad_mask=pad_mask
@@ -660,71 +581,3 @@ class RecUNet(nn.Module):
                 return out, maps
             else:
                 return out
-
-
-class FiLM(nn.Module):
-    def __init__(self,
-                 clim_vec_dim,
-                 sat_feature_dim,
-                 hidden_dim=128):
-        super(FiLM, self).__init__()
-        """
-        Initializes the FiLMLayer module, which applies Feature-wise Linear Modulation (FiLM)
-        to modulate satellite features based on climate data. 
-
-        FiLM, as described in the paper "FiLM: Visual Reasoning with a General Conditioning 
-        Layer" by Perez et al. (2018), modulates neural network feature maps through an affine 
-        transformation (scaling and shifting) using learned parameters (gamma and beta) that 
-        are conditioned on some external input — in this case, the climate data.
-
-        Args:
-            clim_vec_dim (int): Dimension of the climate vector input.
-            sat_feature_dim (int): Dimension of the satellite feature maps to be modulated.
-            hidden_dim (int): Hidden dimension size for the MLP used to generate FiLM parameters.
-        """
-        
-        self.mlp = nn.Sequential(
-            nn.Linear(clim_vec_dim, hidden_dim * 2),
-            nn.ReLU(),
-            nn.Linear(hidden_dim * 2, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 2 * sat_feature_dim), # outputs both gamma and beta
-            # nn.Sigmoid()                              # since we are only working with standardized data
-        )
-
-    def forward(self, sat_features, clim_vec, residual=False, pad_mask=None):
-        """
-        Applies FiLM modulation to satellite features using climate vector.
-
-        The FiLM modulation scales and shifts the satellite features based on parameters 
-        generated from the climate vector. This is achieved by computing gamma (scale) and beta 
-        (shift) parameters from the climate vector through an MLP, then applying these 
-        parameters to the satellite features.
-
-        Args:
-            sat_features (Tensor): Satellite feature maps of shape (B x T x C x H x W) 
-            clim_vec (Tensor): Climate vector of shape (B x T x clim_vec_dim) 
-            pad_mask ....
-            
-        Returns:
-            Tensor: Modulated satellite features of shape (B x T x C x H x W)
-        """
-        
-        film_params = self.mlp(clim_vec)        # (B x T x 2*C)
-        
-        # split along last dimension
-        gamma, beta = film_params.chunk(2, dim=2)
-
-        gamma = gamma.unsqueeze(-1).unsqueeze(-1)   # (B x T x C x 1 x 1)
-        beta = beta.unsqueeze(-1).unsqueeze(-1)     # (B x T x C x 1 x 1)
-
-        if residual:
-            modulated_features = sat_features + (gamma * sat_features + beta)
-        else:
-            modulated_features = gamma * sat_features + beta
-        
-        # For the padded entries, do not apply FiLM:
-        padded_idx = (pad_mask==True).nonzero(as_tuple=True)
-        modulated_features[padded_idx] = sat_features[padded_idx]
-
-        return modulated_features # (B x T x C x H x W)

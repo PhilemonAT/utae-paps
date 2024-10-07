@@ -109,6 +109,7 @@ class UTAE_Fusion(nn.Module):
         self.encoder = encoder
         
         self.fusion_location = fusion_location
+        self.matching_type = matching_type
         self.fusion_style = fusion_style
         self.residual_film = residual_film
 
@@ -282,7 +283,6 @@ class UTAE_Fusion(nn.Module):
         feature_maps = [out]
 
         # SPATIAL ENCODER
-        
         for i in range(self.n_stages - 1):
             out = self.down_blocks[i].smart_forward(feature_maps[-1])
             if self.fusion_location==2:
@@ -1090,6 +1090,7 @@ class FiLM(nn.Module):
 
         return modulated_features # modulated features of shape (B x T x C x H x W)
 
+
 class TransformerEncoderLayerWithWeights(nn.TransformerEncoderLayer):
     def __init__(self, *args, **kwargs):
         super(TransformerEncoderLayerWithWeights, self).__init__(*args, **kwargs)
@@ -1155,105 +1156,6 @@ class TransformerEncoderLayerWithWeights(nn.TransformerEncoderLayer):
             check_other=False,
         )
 
-        is_fastpath_enabled = torch.backends.mha.get_fastpath_enabled()
-
-        # see Fig. 1 of https://arxiv.org/pdf/2002.04745v1.pdf
-        why_not_sparsity_fast_path = ""
-        if not is_fastpath_enabled:
-            why_not_sparsity_fast_path = (
-                "torch.backends.mha.get_fastpath_enabled() was not True"
-            )
-        elif not src.dim() == 3:
-            why_not_sparsity_fast_path = (
-                f"input not batched; expected src.dim() of 3 but got {src.dim()}"
-            )
-        elif self.training:
-            why_not_sparsity_fast_path = "training is enabled"
-        elif not self.self_attn.batch_first:
-            why_not_sparsity_fast_path = "self_attn.batch_first was not True"
-        elif self.self_attn.in_proj_bias is None:
-            why_not_sparsity_fast_path = "self_attn was passed bias=False"
-        elif not self.self_attn._qkv_same_embed_dim:
-            why_not_sparsity_fast_path = "self_attn._qkv_same_embed_dim was not True"
-        elif not self.activation_relu_or_gelu:
-            why_not_sparsity_fast_path = "activation_relu_or_gelu was not True"
-        elif not (self.norm1.eps == self.norm2.eps):
-            why_not_sparsity_fast_path = "norm1.eps is not equal to norm2.eps"
-        elif src.is_nested and (
-            src_key_padding_mask is not None or src_mask is not None
-        ):
-            why_not_sparsity_fast_path = "neither src_key_padding_mask nor src_mask are not supported with NestedTensor input"
-        elif self.self_attn.num_heads % 2 == 1:
-            why_not_sparsity_fast_path = "num_head is odd"
-        elif torch.is_autocast_enabled():
-            why_not_sparsity_fast_path = "autocast is enabled"
-        if not why_not_sparsity_fast_path:
-            tensor_args = (
-                src,
-                self.self_attn.in_proj_weight,
-                self.self_attn.in_proj_bias,
-                self.self_attn.out_proj.weight,
-                self.self_attn.out_proj.bias,
-                self.norm1.weight,
-                self.norm1.bias,
-                self.norm2.weight,
-                self.norm2.bias,
-                self.linear1.weight,
-                self.linear1.bias,
-                self.linear2.weight,
-                self.linear2.bias,
-            )
-
-            # We have to use list comprehensions below because TorchScript does not support
-            # generator expressions.
-            _supported_device_type = [
-                "cpu",
-                "cuda",
-                torch.utils.backend_registration._privateuse1_backend_name,
-            ]
-            if torch.overrides.has_torch_function(tensor_args):
-                why_not_sparsity_fast_path = "some Tensor argument has_torch_function"
-            elif not all(
-                (x.device.type in _supported_device_type) for x in tensor_args
-            ):
-                why_not_sparsity_fast_path = (
-                    "some Tensor argument's device is neither one of "
-                    f"{_supported_device_type}"
-                )
-            elif torch.is_grad_enabled() and any(x.requires_grad for x in tensor_args):
-                why_not_sparsity_fast_path = (
-                    "grad is enabled and at least one of query or the "
-                    "input/output projection weights or biases requires_grad"
-                )
-
-            if not why_not_sparsity_fast_path:
-                merged_mask, mask_type = self.self_attn.merge_masks(
-                    src_mask, src_key_padding_mask, src
-                )
-                print("Now returning.")
-                return torch._transformer_encoder_layer_fwd(
-                    src,
-                    self.self_attn.embed_dim,
-                    self.self_attn.num_heads,
-                    self.self_attn.in_proj_weight,
-                    self.self_attn.in_proj_bias,
-                    self.self_attn.out_proj.weight,
-                    self.self_attn.out_proj.bias,
-                    self.activation_relu_or_gelu == 2,
-                    self.norm_first,
-                    self.norm1.eps,
-                    self.norm1.weight,
-                    self.norm1.bias,
-                    self.norm2.weight,
-                    self.norm2.bias,
-                    self.linear1.weight,
-                    self.linear1.bias,
-                    self.linear2.weight,
-                    self.linear2.bias,
-                    merged_mask,
-                    mask_type,
-                )
-
         x = src
         if self.norm_first:
             x_att, weights = self._sa_block(
@@ -1268,8 +1170,9 @@ class TransformerEncoderLayerWithWeights(nn.TransformerEncoderLayer):
             x = self.norm1(x + x_att)
             x = self.norm2(x + self._ff_block(x))
 
-        return x, weights
-    
+        return x, weights.detach()
+
+
 class TransformerEncoderWithWeights(nn.TransformerEncoder):
     def forward(
         self,
@@ -1319,80 +1222,6 @@ class TransformerEncoderWithWeights(nn.TransformerEncoder):
         why_not_sparsity_fast_path = ""
         str_first_layer = "self.layers[0]"
         batch_first = first_layer.self_attn.batch_first
-        is_fastpath_enabled = torch.backends.mha.get_fastpath_enabled()
-
-        if not is_fastpath_enabled:
-            why_not_sparsity_fast_path = (
-                "torch.backends.mha.get_fastpath_enabled() was not True"
-            )
-        elif not hasattr(self, "use_nested_tensor"):
-            why_not_sparsity_fast_path = "use_nested_tensor attribute not present"
-        elif not self.use_nested_tensor:
-            why_not_sparsity_fast_path = (
-                "self.use_nested_tensor (set in init) was not True"
-            )
-        elif first_layer.training:
-            why_not_sparsity_fast_path = f"{str_first_layer} was in training mode"
-        elif not src.dim() == 3:
-            why_not_sparsity_fast_path = (
-                f"input not batched; expected src.dim() of 3 but got {src.dim()}"
-            )
-        elif src_key_padding_mask is None:
-            why_not_sparsity_fast_path = "src_key_padding_mask was None"
-        elif (
-            (not hasattr(self, "mask_check")) or self.mask_check
-        ) and not torch._nested_tensor_from_mask_left_aligned(
-            src, src_key_padding_mask.logical_not()
-        ):
-            why_not_sparsity_fast_path = "mask_check enabled, and src and src_key_padding_mask was not left aligned"
-        elif output.is_nested:
-            why_not_sparsity_fast_path = "NestedTensor input is not supported"
-        elif mask is not None:
-            why_not_sparsity_fast_path = (
-                "src_key_padding_mask and mask were both supplied"
-            )
-        elif torch.is_autocast_enabled():
-            why_not_sparsity_fast_path = "autocast is enabled"
-
-        if not why_not_sparsity_fast_path:
-            tensor_args = (
-                src,
-                first_layer.self_attn.in_proj_weight,
-                first_layer.self_attn.in_proj_bias,
-                first_layer.self_attn.out_proj.weight,
-                first_layer.self_attn.out_proj.bias,
-                first_layer.norm1.weight,
-                first_layer.norm1.bias,
-                first_layer.norm2.weight,
-                first_layer.norm2.bias,
-                first_layer.linear1.weight,
-                first_layer.linear1.bias,
-                first_layer.linear2.weight,
-                first_layer.linear2.bias,
-            )
-            _supported_device_type = [
-                "cpu",
-                "cuda",
-                torch.utils.backend_registration._privateuse1_backend_name,
-            ]
-            if torch.overrides.has_torch_function(tensor_args):
-                why_not_sparsity_fast_path = "some Tensor argument has_torch_function"
-            elif src.device.type not in _supported_device_type:
-                why_not_sparsity_fast_path = (
-                    f"src device is neither one of {_supported_device_type}"
-                )
-            elif torch.is_grad_enabled() and any(x.requires_grad for x in tensor_args):
-                why_not_sparsity_fast_path = (
-                    "grad is enabled and at least one of query or the "
-                    "input/output projection weights or biases requires_grad"
-                )
-
-            if (not why_not_sparsity_fast_path) and (src_key_padding_mask is not None):
-                convert_to_nested = True
-                output = torch._nested_tensor_from_mask(
-                    output, src_key_padding_mask.logical_not(), mask_check=False
-                )
-                src_key_padding_mask_for_layers = None
 
         seq_len = _get_seq_len(src, batch_first)
         is_causal = _detect_is_causal_mask(mask, is_causal, seq_len)
@@ -1414,7 +1243,8 @@ class TransformerEncoderWithWeights(nn.TransformerEncoder):
             output = self.norm(output)
 
         return output, attention_weights
-    
+
+
 def _generate_square_subsequent_mask(
     sz: int,
     device: Optional[torch.device] = None,

@@ -1,63 +1,9 @@
-from src.backbones import utae_fusion
-from src.backbones import utae, unet3d, convlstm, convgru, fpn
-#from src.panoptic import paps
+from src.backbones import utae_original, utae_fusion, unet3d, convlstm, convgru, fpn
 
-
-def get_model(config, mode="semantic", fusion=None):
+def get_model(config, mode="semantic"):
     if mode == "semantic":
         if config.model == "utae":
-            if fusion is not None:
-                model = utae_fusion.UTAE_Fusion(
-                    input_dim=10,
-                    climate_input_dim=config.climate_input_dim,
-                    encoder_widths=config.encoder_widths,
-                    decoder_widths=config.decoder_widths,
-                    out_conv=config.out_conv,
-                    str_conv_k=config.str_conv_k,
-                    str_conv_s=config.str_conv_s,
-                    str_conv_p=config.str_conv_p,
-                    agg_mode=config.agg_mode,
-                    encoder_norm=config.encoder_norm,
-                    n_head=config.n_head,
-                    d_model=config.d_model,
-                    d_k=config.d_k,
-                    encoder=config.encoder,
-                    return_maps=config.return_maps,
-                    pad_value=config.pad_value,
-                    padding_mode=config.padding_mode,
-                    matching_type=config.matching_type,
-                    use_climate_mlp=config.use_climate_mlp,
-                    fusion_location=config.fusion_location,
-                    fusion_style=config.fusion_style,
-                    residual_film=config.residual_film
-                )
-                # model = utae.UTAE(
-                #     input_dim=config.input_dim,
-                #     encoder_widths=config.encoder_widths,
-                #     decoder_widths=config.decoder_widths,
-                #     out_conv=config.out_conv,
-                #     str_conv_k=config.str_conv_k,
-                #     str_conv_s=config.str_conv_s,
-                #     str_conv_p=config.str_conv_p,
-                #     agg_mode=config.agg_mode,
-                #     encoder_norm=config.encoder_norm,
-                #     n_head=config.n_head,
-                #     d_model=config.d_model,
-                #     d_k=config.d_k,
-                #     encoder=config.encoder,
-                #     return_maps=False,
-                #     pad_value=config.pad_value,
-                #     padding_mode=config.padding_mode,
-                #     include_climate_early=config.include_climate_early,
-                #     include_climate_mid=config.include_climate_mid,
-                #     climate_dim=config.climate_dim,
-                #     use_FILM_early=config.use_FILM_early,
-                #     use_FILM_encoder=config.use_FILM_encoder,
-                #     FILM_hidden_dim=config.FILM_hidden_dim,
-                #     residual_FILM=config.residual_FILM,
-                # )
-            else:
-                model = utae.UTAE(
+            model = utae_original.UTAE(
                     input_dim=10,
                     encoder_widths=config.encoder_widths,
                     decoder_widths=config.decoder_widths,
@@ -74,7 +20,33 @@ def get_model(config, mode="semantic", fusion=None):
                     return_maps=False,
                     pad_value=config.pad_value,
                     padding_mode=config.padding_mode,
+                    last_relu=config.last_relu,
                 )
+        elif config.model == "utae_fusion":
+            model = utae_fusion.UTAE_Fusion(
+                input_dim=10,
+                climate_input_dim=config.climate_input_dim,
+                encoder_widths=config.encoder_widths,
+                decoder_widths=config.decoder_widths,
+                out_conv=config.out_conv,
+                str_conv_k=config.str_conv_k,
+                str_conv_s=config.str_conv_s,
+                str_conv_p=config.str_conv_p,
+                agg_mode=config.agg_mode,
+                encoder_norm=config.encoder_norm,
+                n_head=config.n_head,
+                d_model=config.d_model,
+                d_k=config.d_k,
+                encoder=config.encoder,
+                return_maps=config.return_maps,
+                pad_value=config.pad_value,
+                padding_mode=config.padding_mode,
+                matching_type=config.matching_type,
+                use_climate_mlp=config.use_climate_mlp,
+                fusion_location=config.fusion_location,
+                fusion_style=config.fusion_style,
+                residual_film=config.residual_film
+            )
         elif config.model == "unet3d":
             model = unet3d.UNet3D(
                 in_channel=10, n_classes=config.num_classes, pad_value=config.pad_value
