@@ -86,7 +86,7 @@ list_args = ["encoder_widths", "decoder_widths", "out_conv"]
 parser.set_defaults(cache=False)
 
 def iterate(model, data_loader, criterion, config, optimizer=None, 
-            mode="train", device=None):
+            mode="train", return_att_climate=False, device=None):
     loss_meter = tnt.meter.AverageValueMeter()
     iou_meter = IoU(
         num_classes=config.num_classes,
@@ -105,6 +105,9 @@ def iterate(model, data_loader, criterion, config, optimizer=None,
         y = data_dict["target"]
 
         if mode != "train":
+            if return_att_climate:
+                out, att_weights = model(input_sat, dates_sat, input_clim, dates_clim, 
+                                 batch_positions=dates_sat, return_att_clim=return_att_climate)
             with torch.no_grad():
                 out = model(input_sat, dates_sat, input_clim, dates_clim, batch_positions=dates_sat)
         else:
@@ -146,7 +149,10 @@ def iterate(model, data_loader, criterion, config, optimizer=None,
     wandb.log(metrics)
 
     if mode == "test":
-        return metrics, iou_meter.conf_metric.value()
+        if return_att_climate:
+            return metrics, iou_meter.conf_metric.value(), att_weights
+        else:
+            return metrics, iou_meter.conf_metric.value()
     else:
         return metrics
     

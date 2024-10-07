@@ -80,7 +80,7 @@ def get_model(config, mode="semantic"):
                 hidden_dim=180,
             )
         elif config.model == "uconvlstm":
-            model = utae.RecUNet(
+            model = utae_original.RecUNet(
                 input_dim=10,
                 encoder_widths=[64, 64, 64, 128],
                 decoder_widths=[32, 32, 64, 128],
@@ -97,7 +97,7 @@ def get_model(config, mode="semantic"):
                 pad_value=0,
             )
         elif config.model == "buconvlstm":
-            model = utae.RecUNet(
+            model = utae_original.RecUNet(
                 input_dim=10,
                 encoder_widths=[64, 64, 64, 128],
                 decoder_widths=[32, 32, 64, 128],
@@ -116,7 +116,7 @@ def get_model(config, mode="semantic"):
         return model
     elif mode == "panoptic":
         if config.backbone == "utae":
-            model = utae.UTAE(
+            model = utae_original.UTAE(
                 input_dim=10,
                 encoder_widths=config.encoder_widths,
                 decoder_widths=config.decoder_widths,
@@ -135,7 +135,7 @@ def get_model(config, mode="semantic"):
                 padding_mode=config.padding_mode,
             )
         elif config.backbone == "uconvlstm":
-            model = utae.RecUNet(
+            model = utae_original.RecUNet(
                 input_dim=10,
                 encoder_widths=[64, 64, 64, 128],
                 decoder_widths=[32, 32, 64, 128],
