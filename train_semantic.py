@@ -9,6 +9,7 @@ import os
 import pickle as pkl
 import pprint
 import time
+import random
 
 import numpy as np
 import torch
@@ -205,8 +206,8 @@ def prepare_output(config, cv_type="official"):
         for fold in range(1, 6):
             os.makedirs(os.path.join(config.res_dir, cv_type, "Fold_{}".format(fold)), exist_ok=True)
     else:
-        for region in range(1, 4):
-            os.makedirs(os.path.join(config.res_dir, cv_type, "Region_{}".format(region)), exist_ok=True)
+        for region in range(1, 6):
+            os.makedirs(os.path.join(config.res_dir, cv_type, "Run_{}".format(region)), exist_ok=True)
 
 def checkpoint(fold, log, config, cv_type="official"):
     if cv_type=="official":
@@ -216,7 +217,7 @@ def checkpoint(fold, log, config, cv_type="official"):
             json.dump(log, outfile, indent=4)
     else:
         with open(
-            os.path.join(config.res_dir,  cv_type, "Region_{}".format(fold), "trainlog.json"), "w"
+            os.path.join(config.res_dir,  cv_type, "Run_{}".format(fold), "trainlog.json"), "w"
         ) as outfile:
             json.dump(log, outfile, indent=4)
 
@@ -235,13 +236,13 @@ def save_results(fold, metrics, conf_mat, config, cv_type="official"):
         )
     else:
         with open(
-            os.path.join(config.res_dir, cv_type, "Region_{}".format(fold), "test_metrics.json"), "w"
+            os.path.join(config.res_dir, cv_type, "Run_{}".format(fold), "test_metrics.json"), "w"
         ) as outfile:
             json.dump(metrics, outfile, indent=4)
         pkl.dump(
             conf_mat,
             open(
-                os.path.join(config.res_dir, cv_type, "Region_{}".format(fold), "conf_mat.pkl"), "wb"
+                os.path.join(config.res_dir, cv_type, "Run_{}".format(fold), "conf_mat.pkl"), "wb"
             ),
         )
 
@@ -257,10 +258,10 @@ def overall_performance(config, cv_type="official"):
                 )
             )
     else:
-        for region in range(1, 4):
+        for region in range(1, 6):
             cm += pkl.load(
                 open(
-                    os.path.join(config.res_dir, cv_type, "Region_{}".format(region), "conf_mat.pkl"),
+                    os.path.join(config.res_dir, cv_type, "Run_{}".format(region), "conf_mat.pkl"),
                     "rb",
                 )
             )
@@ -293,13 +294,18 @@ def main(config):
     ]
 
     region_fold_sequence = [
-        [[1], [3], [4]],
-        [[3], [1], [4]],
-        [[4], [1], [3]],
-    ]
+        [[3, 2], [1], [4]]
+    ] * 5
 
+    # Set all possible seeds
+    random.seed(config.rdm_seed)
     np.random.seed(config.rdm_seed)
     torch.manual_seed(config.rdm_seed)
+    torch.cuda.manual_seed(config.rdm_seed)
+    torch.cuda.manual_seed_all(config.rdm_seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
     prepare_output(config, cv_type=config.cv_type)
     device = torch.device(config.device)
 
@@ -314,6 +320,7 @@ def main(config):
         )
 
     for fold, (train_folds, val_fold, test_fold) in enumerate(fold_sequence):
+
         if config.fold is not None:
             fold = config.fold - 1
         
@@ -465,7 +472,7 @@ def main(config):
                                 "optimizer": optimizer.state_dict(),
                             },
                             os.path.join(
-                                config.res_dir, config.cv_type, "Region_{}".format(fold + 1), "model.pth.tar"
+                                config.res_dir, config.cv_type, "Run_{}".format(fold + 1), "model.pth.tar"
                             ),
                         )
 
@@ -486,7 +493,7 @@ def main(config):
             model.load_state_dict(
                 torch.load(
                     os.path.join(
-                        config.res_dir, config.cv_type, "Region_{}".format(fold + 1), "model.pth.tar"
+                        config.res_dir, config.cv_type, "Run_{}".format(fold + 1), "model.pth.tar"
                     )
                 )["state_dict"]
             )

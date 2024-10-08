@@ -4,6 +4,7 @@ import os
 import pickle as pkl
 import pprint
 import time
+import random
 
 import numpy as np
 import torch
@@ -198,7 +199,7 @@ def prepare_output(config, cv_type="official"):
         for fold in range(1, 6):
             os.makedirs(os.path.join(config.res_dir, cv_type, "Fold_{}".format(fold)), exist_ok=True)
     else:
-        for region in range(1, 4):
+        for region in range(1, 6):
             os.makedirs(os.path.join(config.res_dir, cv_type, "Region_{}".format(region)), exist_ok=True)
 
 def recursive_todevice(x, device):
@@ -220,7 +221,7 @@ def overall_performance(config, cv_type="official"):
                 )
             )
     else:
-        for region in range(1, 4):
+        for region in range(1, 6):
             cm += pkl.load(
                 open(
                     os.path.join(config.res_dir, cv_type, "Region_{}".format(region), "conf_mat.pkl"),
@@ -255,13 +256,17 @@ def main(config):
     ]
 
     region_fold_sequence = [
-        [[1], [3], [4]],
-        [[3], [1], [4]],
-        [[4], [1], [3]],
-    ]
+        [[3, 2], [1], [4]]
+    ] * 5
 
+    # Set all possible seeds
+    random.seed(config.rdm_seed)
     np.random.seed(config.rdm_seed)
     torch.manual_seed(config.rdm_seed)
+    torch.cuda.manual_seed(config.rdm_seed)
+    torch.cuda.manual_seed_all(config.rdm_seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     device = torch.device(config.device)
     prepare_output(config, cv_type=config.cv_type)
