@@ -249,13 +249,13 @@ class UTAE_Fusion(nn.Module):
         )  # BxT pad mask
 
         if self.fusion_location in [1, 2, 3]:
-            if self.matching_type=='causal':
+            if self.matching_type in ['causal', 'noncausal']:
                 climate_matched, weights = self.matchclimate.transform_climate_data(
                     sat_data=input,
                     sat_dates=sat_dates,
                     climate_data=climate_input,
                     climate_dates=climate_dates
-                ) # (B x T x V) or (B x T x d_model) if causal or MLP applied
+                ) # (B x T x d_model)
             else:
                 climate_matched = self.matchclimate.transform_climate_data(
                     sat_data=input,
