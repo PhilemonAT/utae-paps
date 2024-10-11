@@ -83,6 +83,7 @@ class UTAE_Fusion(nn.Module):
                                 - 'match_dates': Use only climate data from the exact dates matching the satellite observations.
                                 - 'weekly': Use climate data from the whole week prior to each satellite observation.
                                 - 'causal': Use a causal transformer to incorporate climate data sequentially.            
+                                - 'noncausal': Use a transformer (without causal mask) to incorporate climate data sequentially.
             use_climate_mlp (bool): If True, a small MLP processes the climate data before fusion to 
                                     align it with the satellite data's dimensions.
             climate_dim (int): The dimension of the climate data processed by the EarlyFusionModel
@@ -122,7 +123,8 @@ class UTAE_Fusion(nn.Module):
             raise NotImplementedError(f"fusion_style: {fusion_style} not valid")
         assert not (fusion_style == "concat" and fusion_location==3), "Cannot use fusion style 'concat' with mid-fusion"
         assert not (fusion_style == "concat" and fusion_location==2), "Cannot use fusion style 'concat' with encoder-fusion"
-        assert not (matching_type == 'causal' and use_climate_mlp), "Using climate MLP with causal fusion not implemented"
+        assert not (matching_type in ['causal', 'noncausal'] and use_climate_mlp), "Using climate MLP with climate \
+            transformer not allowed"
 
         if encoder:
             self.return_maps = True
@@ -273,7 +275,7 @@ class UTAE_Fusion(nn.Module):
             else:
                 # Fallback option is always concat
                 _, _, _, H, W = input.size()
-                clim_vec_expanded = climate_matched.unsqueeze(-1).unsqueeze(-1)   # (B x T x climate_dim x 1 x 1)
+                clim_vec_expanded = climate_matched.unsqueeze(-1).unsqueeze(-1) # (B x T x climate_dim x 1 x 1)
                 clim_vec_expanded = clim_vec_expanded.expand(-1, -1, -1, H, W)  # (B x T x climate_dim x H x W)
                 input = torch.cat((input, clim_vec_expanded), dim=2)            # (B x T x (C + climate_dim) x H x W)
                 out = self.in_conv.smart_forward(input)                         # (B x T x C1 x H x W)
@@ -779,6 +781,7 @@ class PrepareMatchedDataEarly(nn.Module):
                 - 'match_dates': Use only climate data from the exact dates matching the satellite observations.
                 - 'weekly': Use climate data from the whole week prior to each satellite observation.
                 - 'causal': Use a causal transformer to incorporate climate data sequentially.
+                - 'noncausal': Use a transformer (without causal mask) to incorporate climate data sequentially.
             use_climate_mlp (bool): If True, a small MLP processes the climate data before fusion to 
                                     align it with the satellite data's dimensions.
             mlp_hidden_dim (int): Hidden dimension size of the MLP used when `use_climate_mlp` is True.
@@ -798,10 +801,10 @@ class PrepareMatchedDataEarly(nn.Module):
             )
             self.climate_dim = d_model # if we processed climate data with MLP, climate dim. will be of size d_model
 
-        if matching_type == 'causal':
+        if matching_type in ['causal', 'noncausal']:
             assert use_climate_mlp == False, "Using climate MLP with causal fusion not implemented"
 
-            self.causal_transformer_encoder = ClimateTransformerEncoder(
+            self.climate_transformer_encoder = ClimateTransformerEncoder(
                 climate_input_dim=climate_input_dim,
                 d_model=d_model,
                 nhead=nhead_climate_transformer,
@@ -829,22 +832,25 @@ class PrepareMatchedDataEarly(nn.Module):
 
         batch_size, num_sat_timesteps, _, height, width = sat_data.size()
 
-        if self.matching_type == 'causal':
-            # Create causal mask for the entire sequence
-            causal_mask = torch.triu(torch.ones((climate_dates.size(1), climate_dates.size(1)),
-                                                device=climate_data.device), diagonal=1)
-            
-            # expand mask for batch and heads
-            num_heads = self.causal_transformer_encoder.climate_transformer.layers[0].self_attn.num_heads
-            causal_mask = causal_mask.unsqueeze(0).expand(batch_size, -1, -1) # (B x T' x T')
-            causal_mask = causal_mask.unsqueeze(1).expand(-1, num_heads, -1, -1) # (B x Heads x T' x T')
-            causal_mask = causal_mask.reshape(batch_size * num_heads, climate_dates.size(1), climate_dates.size(1)) # (B*H, T', T')
-            causal_mask = causal_mask.masked_fill(causal_mask==1, float('-inf'))          
+        if self.matching_type in ['causal', 'noncausal']:
+            if self.matching_type == 'causal':
+                # Create causal mask for the entire sequence
+                causal_mask = torch.triu(torch.ones((climate_dates.size(1), climate_dates.size(1)),
+                                                    device=climate_data.device), diagonal=1)
+                
+                # expand mask for batch and heads
+                num_heads = self.climate_transformer_encoder.climate_transformer.layers[0].self_attn.num_heads
+                causal_mask = causal_mask.unsqueeze(0).expand(batch_size, -1, -1) # (B x T' x T')
+                causal_mask = causal_mask.unsqueeze(1).expand(-1, num_heads, -1, -1) # (B x Heads x T' x T')
+                causal_mask = causal_mask.reshape(batch_size * num_heads, climate_dates.size(1), climate_dates.size(1)) # (B*H, T', T')
+                causal_mask = causal_mask.masked_fill(causal_mask==1, float('-inf'))          
 
-            # compute climate embeddings for the entire sequence
-            climate_embeddings, weights = self.causal_transformer_encoder(climate_data, 
-                                                                          mask=causal_mask,
-                                                                          ) # (B x T' x d_model)
+                # compute climate embeddings for the entire sequence
+                climate_embeddings, weights = self.climate_transformer_encoder(climate_data, 
+                                                                               mask=causal_mask) # (B x T' x d_model)
+            else:
+                # Use non-causal transformer (which is able to see all the data) to process the climate data
+                climate_embeddings, weights = self.climate_transformer_encoder(climate_data)
 
             climate_matched = []
 
