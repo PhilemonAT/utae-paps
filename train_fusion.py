@@ -96,6 +96,10 @@ def iterate(model, data_loader, criterion, config, optimizer=None,
     )
 
     t_start = time.time()
+
+    # Initalize list to store attention weights for whole epoch
+    att_weights_epoch = []
+
     for i, batch in enumerate(data_loader):
         data_dict = batch
         if device is not None:
@@ -108,7 +112,8 @@ def iterate(model, data_loader, criterion, config, optimizer=None,
         if mode != "train":
             if return_att_climate:
                 out, att_weights = model(input_sat, dates_sat, input_clim, dates_clim, 
-                                 batch_positions=dates_sat, return_att_clim=return_att_climate)
+                                         batch_positions=dates_sat, return_att_clim=return_att_climate)
+                att_weights_epoch.append(att_weights[0]) # Only append first element (= layer)
             with torch.no_grad():
                 out = model(input_sat, dates_sat, input_clim, dates_clim, batch_positions=dates_sat)
         else:
@@ -125,7 +130,6 @@ def iterate(model, data_loader, criterion, config, optimizer=None,
             pred = out.argmax(dim=1)
         iou_meter.add(pred, y)
         loss_meter.add(loss.item())
-
 
         if (i + 1) % config.display_step == 0:
             miou, acc = iou_meter.get_miou_acc()
@@ -151,6 +155,9 @@ def iterate(model, data_loader, criterion, config, optimizer=None,
 
     if mode == "test":
         if return_att_climate:
+            # Aggregate attention weights over batch dimension
+            att_weights = torch.stack(att_weights)
+            att_weights = torch.mean(att_weights, dim = 0)
             return metrics, iou_meter.conf_metric.value(), att_weights
         else:
             return metrics, iou_meter.conf_metric.value()
