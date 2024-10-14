@@ -8,6 +8,7 @@ import json
 import os
 import pprint
 import pickle as pkl
+import random
 
 import numpy as np
 import torch
@@ -17,6 +18,7 @@ import torch.utils.data as data
 from src import utils, model_utils
 from src.dataset_extended import PASTIS_Climate_Dataset
 
+import wandb
 
 from train_fusion import iterate, overall_performance, save_results, prepare_output
 
@@ -35,6 +37,22 @@ parser.add_argument(
     help="Path to the folder where the results are saved.",
 )
 parser.add_argument(
+    "--climate_folder",
+    default="",
+    type=str,
+    help="Path to the folder where the results are saved.",
+)
+parser.add_argument(
+    "--cv_type",
+    default="official",
+    type=str,
+)
+parser.add_argument(
+    "--fold",
+    default=None,
+    type=int,
+)
+parser.add_argument(
     "--res_dir",
     default="./inference_utae",
     type=str,
@@ -42,12 +60,6 @@ parser.add_argument(
 )
 parser.add_argument(
     "--num_workers", default=8, type=int, help="Number of data loading workers"
-)
-parser.add_argument(
-    "--fold",
-    default=None,
-    type=int,
-    help="Do only one of the five fold (between 1 and 5)",
 )
 parser.add_argument(
     "--device",
@@ -61,8 +73,17 @@ parser.add_argument(
     type=int,
     help="Interval in batches between display of training metrics",
 )
+parser.add_argument("--model_tag", type=str)
+parser.add_argument("--config_tag", type=str)
+parser.add_argument("--run_tag", type=str)
+parser.add_argument("--experiment_name", type=str)
 
 def main(config):
+    experiment_name = config.experiment_name
+    wandb.init(project="TEST", config=config, name=experiment_name,
+               tags=[config.run_tag, config.model_tag, config.config_tag])
+    wandb.config.update(vars(config))
+
     official_fold_sequence = [
         [[1, 2, 3], [4], [5]],
         [[2, 3, 4], [5], [1]],
@@ -72,13 +93,19 @@ def main(config):
     ]
 
     region_fold_sequence = [
-        [[1], [3], [4]],
-        [[3], [1], [4]],
-        [[4], [1], [3]],
-    ]
+        [[3, 2], [1], [4]]
+    ] * 5
 
+
+    # Set all possible seeds
+    random.seed(config.rdm_seed)
     np.random.seed(config.rdm_seed)
     torch.manual_seed(config.rdm_seed)
+    torch.cuda.manual_seed(config.rdm_seed)
+    torch.cuda.manual_seed_all(config.rdm_seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    
     device = torch.device(config.device)
     prepare_output(config, cv_type=config.cv_type)
 
@@ -193,22 +220,32 @@ def main(config):
         )
         save_results(fold + 1, test_metrics, conf_mat.cpu().numpy(), config, cv_type=config.cv_type)
 
-        pkl.dump(
-            att_weights,
-            open(
-                os.path.join(config.res_dir, config.cv_type, "Fold_{}".format(fold), "att_weights.pkl"), "wb"
-            ),
-        )
+        if config.cv_type=='official':
+            pkl.dump(
+                att_weights,
+                open(
+                    os.path.join(config.res_dir, config.cv_type, "Fold_{}".format(fold+1), "att_weights.pkl"), "wb"
+                ),
+            )
+        else:
+            pkl.dump(
+                att_weights,
+                open(
+                    os.path.join(config.res_dir, config.cv_type, "Region_{}".format(fold+1), "att_weights.pkl"), "wb"
+                ),
+            )
 
     if config.fold is None:
         overall_performance(config, cv_type=config.cv_type)
+
+    wandb.finish()
 
 
 if __name__ == "__main__":
     test_config = parser.parse_args()
 
 
-    with open(os.path.join(test_config.weight_folder, "conf.json")) as file:
+    with open(os.path.join(test_config.weight_folder, test_config.cv_type, "conf.json")) as file:
         model_config = json.loads(file.read())
 
     config = {**model_config, **vars(test_config)}
