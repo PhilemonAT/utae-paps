@@ -242,8 +242,8 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
         )
 
         # Get gdd
-        t_min = self.climate_data["tmin VARIABLE"].loc[:, str(id_patch)].float()
-        t_max = self.climate_data["tmax VARIABLE"].loc[:, str(id_patch)].float()
+        t_min = self.climate_data["2m_temperature-24_hour_minimum"].loc[:, str(id_patch)]
+        t_max = self.climate_data["2m_temperature-24_hour_maximum"].loc[:, str(id_patch)]
 
         t_base, t_cap = 0, 30
         gdd = np.maximum(
@@ -251,7 +251,8 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
         )
 
         gdd = np.cumsum(gdd, axis=0)
-        gdd = gdd[dates]
+        gdd = torch.tensor(gdd.iloc[dates.tolist()].values).float()
+
 
         # Calculate climate dates relative to reference_date
         climate_start_date = self.reference_date

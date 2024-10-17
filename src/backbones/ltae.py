@@ -1,6 +1,7 @@
 import copy
 
 import numpy as np
+import math
 import torch
 import torch.nn as nn
 
@@ -19,6 +20,7 @@ class LTAE2d(nn.Module):
         T=1000,
         return_att=False,
         positional_encoding=True,
+        pos_type=None,
     ):
         """
         Lightweight Temporal Attention Encoder (L-TAE) for image time series.
@@ -50,10 +52,23 @@ class LTAE2d(nn.Module):
             self.inconv = None
         assert self.mlp[0] == self.d_model
 
+        if pos_type is not None:
+            self.with_gdd = True
+        else:
+            self.with_gdd = False
+
         if positional_encoding:
-            self.positional_encoder = PositionalEncoder(
-                self.d_model // n_head, T=T, repeat=n_head
-            )
+            if not self.with_gdd:
+                self.positional_encoder = PositionalEncoder(
+                    self.d_model // n_head, T=T, repeat=n_head
+                )
+            else:
+                if pos_type=='rnn':
+                    self.positional_encoder = RNNPositionalEncoding(d_model=self.d_model, 
+                                                                    n_head=n_head, 
+                                                                    sinusoid=True)
+                elif pos_type=='default':
+                    pass
         else:
             self.positional_encoder = None
 
@@ -217,10 +232,6 @@ class ScaledDotProductAttention(nn.Module):
             return output, attn
 
 
-
-
-
-
 # IMPLEMENTATION OF THERMAL POSITIONAL ENCODING
 def get_positional_encoding(max_len, d_model, T=1000.0):
     pe = torch.zeros(max_len, d_model)
@@ -238,7 +249,9 @@ class RNNPositionalEncoding(nn.Module):
         self.sinusoid = sinusoid
         if self.sinusoid:
             sin_tab = get_positional_encoding(max_pos, dim, T=10000)
+            print(sin_tab)
             self.position_enc = nn.Embedding.from_pretrained(sin_tab, freeze=True)
+            print("embedding worked ! ")
             input_dim = dim
         else:
             input_dim = 1

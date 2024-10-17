@@ -126,6 +126,7 @@ class UTAE(nn.Module):
             mlp=[d_model, encoder_widths[-1]],
             return_att=True,
             d_k=d_k,
+            pos_type='rnn'
         )
         self.temporal_aggregator = Temporal_Aggregator(mode=agg_mode)
         self.out_conv = ConvBlock(nkernels=[decoder_widths[0]] + out_conv, padding_mode=padding_mode,
