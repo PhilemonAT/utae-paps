@@ -241,6 +241,18 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
              for var in self.climate_data], dim=1
         )
 
+        # Get gdd
+        t_min = self.climate_data["tmin VARIABLE"].loc[:, str(id_patch)].float()
+        t_max = self.climate_data["tmax VARIABLE"].loc[:, str(id_patch)].float()
+
+        t_base, t_cap = 0, 30
+        gdd = np.maximum(
+            (np.minimum(t_max, t_cap) + np.maximum(t_min, t_base)) / 2 - t_base, 0
+        )
+
+        gdd = np.cumsum(gdd, axis=0)
+        gdd = gdd[dates]
+
         # Calculate climate dates relative to reference_date
         climate_start_date = self.reference_date
         num_days = climate_data.size(0)
@@ -254,5 +266,6 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
         return {
             "input_satellite": (data, dates),
             "input_climate": (climate_data, climate_dates),
-            "target": target
+            "target": target,
+            "gdd": gdd
         }

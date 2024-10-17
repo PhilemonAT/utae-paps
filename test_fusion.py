@@ -93,7 +93,7 @@ def main(config):
     ]
 
     region_fold_sequence = [
-        [[3, 2], [1], [4]]
+        [[1, 2], [3], [4]]
     ] * 5
 
 

@@ -215,3 +215,46 @@ class ScaledDotProductAttention(nn.Module):
             return output, attn, comp
         else:
             return output, attn
+
+
+
+
+
+
+# IMPLEMENTATION OF THERMAL POSITIONAL ENCODING
+def get_positional_encoding(max_len, d_model, T=1000.0):
+    pe = torch.zeros(max_len, d_model)
+    position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+    div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(T) / d_model))
+    pe[:, 0::2] = torch.sin(position * div_term)
+    pe[:, 1::2] = torch.cos(position * div_term)
+    return pe
+
+
+class RNNPositionalEncoding(nn.Module):
+    def __init__(self, d_model, n_head, sinusoid=True, max_pos=10000):
+        super().__init__()
+        dim = d_model // n_head
+        self.sinusoid = sinusoid
+        if self.sinusoid:
+            sin_tab = get_positional_encoding(max_pos, dim, T=10000)
+            self.position_enc = nn.Embedding.from_pretrained(sin_tab, freeze=True)
+            input_dim = dim
+        else:
+            input_dim = 1
+
+        self.rnn = nn.GRU(input_dim, dim, batch_first=True)
+        self.mlp = nn.Linear(dim, dim)
+        self.n_head = n_head
+        self.max_pos = max_pos
+
+
+    def forward(self, x):
+        if not self.sinusoid:
+            x = x.unsqueeze(2) / self.max_pos  # normalize to [0, 1]
+        else:
+            x = self.position_enc(x)
+        x, _ = self.rnn(x)
+        x = self.mlp(x)
+        x = torch.cat([x for _ in range(self.n_head)], dim=2)
+        return x

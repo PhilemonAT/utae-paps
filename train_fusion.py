@@ -66,6 +66,7 @@ parser.add_argument("--noise_std", default=0.01, type=float, help="Standard devi
 parser.add_argument("--epochs", default=100, type=int, help="Number of epochs per fold")
 parser.add_argument("--batch_size", default=4, type=int, help="Batch size")
 parser.add_argument("--lr", default=0.001, type=float, help="Learning rate")
+parser.add_argument("--weight_decay", default=0.0, type=float, help="Weight decay for optimizer")
 parser.add_argument("--mono_date", default=None, type=str)
 parser.add_argument("--ref_date", default="2018-09-01", type=str)
 parser.add_argument("--cv_type", default="official", type=str, help="Type of cross-validation to use ('official' or 'regions')")
@@ -263,7 +264,7 @@ def main(config):
     ]
 
     region_fold_sequence = [
-        [[3, 2], [1], [4]]
+        [[1, 2], [3], [4]]
     ] * 5
 
     # Set all possible seeds
@@ -381,7 +382,7 @@ def main(config):
         model.apply(weight_init)
 
         criterion = nn.CrossEntropyLoss(ignore_index=config.ignore_index)
-        optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
+        optimizer = torch.optim.Adam(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
 
         # Training loop
         trainlog = {}
