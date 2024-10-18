@@ -47,6 +47,7 @@ parser.add_argument("--n_head", default=16, type=int)
 parser.add_argument("--d_model", default=256, type=int)
 parser.add_argument("--d_k", default=4, type=int)
 parser.add_argument("--last_relu", default=False, type=bool)
+parser.add_argument("--with_gdd", deafult=False, type=bool)
 
 # Set-up parameters
 parser.add_argument(
@@ -145,15 +146,22 @@ def iterate(
     for i, batch in enumerate(data_loader):
         if device is not None:
             batch = recursive_todevice(batch, device)
-        (x, dates), y = batch
+        (x, dates), y, gdd = batch
         y = y.long()
+        gdd = (gdd * 10_000).long() # scale and convert to long tensor
 
         if mode != "train":
             with torch.no_grad():
-                out = model(x, batch_positions=dates)
+                if config.with_gdd:
+                    out = model(x, batch_positions=gdd)
+                else:
+                    out = model(x, batch_positions=dates)
         else:
             optimizer.zero_grad()
-            out = model(x, batch_positions=dates)
+            if config.with_gdd:
+                out = model(x, batch_positions=gdd)
+            else:
+                out = model(x, batch_positions=dates)
 
         loss = criterion(out, y)
         if mode == "train":

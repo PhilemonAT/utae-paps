@@ -21,6 +21,7 @@ def get_model(config, mode="semantic"):
                     pad_value=config.pad_value,
                     padding_mode=config.padding_mode,
                     last_relu=config.last_relu,
+                    pos_type=config.pos_type
                 )
         elif config.model == "utae_fusion":
             model = utae_fusion.UTAE_Fusion(
