@@ -47,7 +47,7 @@ parser.add_argument("--n_head", default=16, type=int)
 parser.add_argument("--d_model", default=256, type=int)
 parser.add_argument("--d_k", default=4, type=int)
 parser.add_argument("--last_relu", default=False, type=bool)
-parser.add_argument("--with_gdd", deafult=False, type=bool)
+parser.add_argument("--pos_type", default=None, type=str)
 
 # Set-up parameters
 parser.add_argument(
@@ -150,15 +150,20 @@ def iterate(
         y = y.long()
         gdd = (gdd * 10_000).long() # scale and convert to long tensor
 
+        if config.pos_type is not None:
+            with_gdd = True
+        else:
+            with_gdd = False
+
         if mode != "train":
             with torch.no_grad():
-                if config.with_gdd:
+                if with_gdd:
                     out = model(x, batch_positions=gdd)
                 else:
                     out = model(x, batch_positions=dates)
         else:
             optimizer.zero_grad()
-            if config.with_gdd:
+            if with_gdd:
                 out = model(x, batch_positions=gdd)
             else:
                 out = model(x, batch_positions=dates)
