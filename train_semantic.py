@@ -20,7 +20,7 @@ import torchnet as tnt
 import wandb
 
 from src import utils, model_utils
-from src.dataset import PASTIS_Dataset
+from src.dataset_extended import PASTIS_Climate_Dataset
 from src.learning.metrics import confusion_matrix_analysis
 from src.learning.miou import IoU
 from src.learning.weight_init import weight_init
@@ -56,6 +56,7 @@ parser.add_argument(
     type=str,
     help="Path to the folder where the results are saved.",
 )
+parser.add_argument("--climate_folder", default="", type=str, help="Path to the climate dataset folder")
 parser.add_argument(
     "--res_dir",
     default="./results",
@@ -83,6 +84,9 @@ parser.add_argument(
     action="store_true",
     help="If specified, the whole dataset is kept in RAM",
 )
+parser.add_argument("--apply_noise", default=True, type=bool, help="Apply Gaussian noise to the data as augmentation")
+parser.add_argument("--noise_std", default=0.01, type=float, help="Standard deviation for Gaussian noise")
+
 # Training parameters
 parser.add_argument("--epochs", default=100, type=int, help="Number of epochs per fold")
 parser.add_argument("--batch_size", default=4, type=int, help="Batch size")
@@ -144,9 +148,15 @@ def iterate(
 
     t_start = time.time()
     for i, batch in enumerate(data_loader):
+        data_dict = batch
         if device is not None:
-            batch = recursive_todevice(batch, device)
-        (x, dates), y, gdd = batch
+            data_dict = recursive_todevice(data_dict, device)
+
+        x, dates = data_dict["input_satellite"]
+        input_clim, dates_clim = data_dict["input_clim"]
+        y = data_dict["target"]
+        gdd = data_dict["gdd"]
+
         y = y.long()
         gdd = (gdd * 10_000).long() # scale and convert to long tensor
 
@@ -341,11 +351,14 @@ def main(config):
         # Dataset definition
         dt_args = dict(
             folder=config.dataset_folder,
+            climate_folder=config.climate_folder,
             norm=True,
             reference_date=config.ref_date,
             mono_date=config.mono_date,
             target="semantic",
             sats=["S2"],
+            apply_noise=config.apply_noise,
+            noise_std=config.noise_std
         )
 
         if config.cv_type == 'regions':
@@ -374,9 +387,9 @@ def main(config):
         else:
             class_mapping = None
 
-        dt_train = PASTIS_Dataset(**dt_args, folds=train_folds, cv_type=config.cv_type, class_mapping=class_mapping, cache=config.cache)
-        dt_val = PASTIS_Dataset(**dt_args, folds=val_fold, cv_type=config.cv_type, class_mapping=class_mapping, cache=config.cache)
-        dt_test = PASTIS_Dataset(**dt_args, folds=test_fold, cv_type=config.cv_type, class_mapping=class_mapping)
+        dt_train = PASTIS_Climate_Dataset(**dt_args, folds=train_folds, cv_type=config.cv_type, class_mapping=class_mapping, cache=config.cache)
+        dt_val = PASTIS_Climate_Dataset(**dt_args, folds=val_fold, cv_type=config.cv_type, class_mapping=class_mapping, cache=config.cache)
+        dt_test = PASTIS_Climate_Dataset(**dt_args, folds=test_fold, cv_type=config.cv_type, class_mapping=class_mapping)
 
         collate_fn = lambda x: utils.pad_collate(x, pad_value=config.pad_value)
         train_loader = data.DataLoader(

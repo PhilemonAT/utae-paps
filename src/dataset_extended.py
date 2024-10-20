@@ -85,7 +85,7 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
             if cv_type == "official":
                 assert all(fold in range(1, 6) for fold in folds), "If cv_type='official', folds must be in the range 1 to 5."
             elif cv_type == "regions":
-                assert all(fold in [1, 3, 4] for fold in folds), "If cv_type='regions', folds must be one of [1, 3, 4]."
+                assert all(fold in range(1, 6) for fold in folds), "If cv_type='regions', folds must be in the range 1 to 6."
 
         # Select Fold samples (official PASTIS-folds or regions)
         if folds is not None:
