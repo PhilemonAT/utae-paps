@@ -249,9 +249,7 @@ class RNNPositionalEncoding(nn.Module):
         self.sinusoid = sinusoid
         if self.sinusoid:
             sin_tab = get_positional_encoding(max_pos, dim, T=10000)
-            print(sin_tab)
             self.position_enc = nn.Embedding.from_pretrained(sin_tab, freeze=True)
-            print("embedding worked ! ")
             input_dim = dim
         else:
             input_dim = 1

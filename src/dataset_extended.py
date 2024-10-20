@@ -108,11 +108,14 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
         # Load and normalize climate data
         print("Loading climate data . . .")
         self.climate_data = {}
+        self.climate_data_for_gdd = {}
         for var in os.listdir(self.climate_folder):
             if var.split('.')[1] != "csv":
                 continue
             var_name = var.split('.')[0]
             df = pd.read_csv(os.path.join(self.climate_folder, var), index_col=0)
+            if var_name in ['2m_temperature-24_hour_minimum', '2m_temperature-24_hour_maximum']:
+                self.climate_data_for_gdd[var_name] = df
             if self.norm:
                 mean = df.mean(axis=0)
                 std = df.std(axis=0)
@@ -242,8 +245,12 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
         )
 
         # Get gdd
-        t_min = self.climate_data["2m_temperature-24_hour_minimum"].loc[:, str(id_patch)]
-        t_max = self.climate_data["2m_temperature-24_hour_maximum"].loc[:, str(id_patch)]
+        t_min = self.climate_data_for_gdd["2m_temperature-24_hour_minimum"].loc[:, str(id_patch)]
+        t_max = self.climate_data_for_gdd["2m_temperature-24_hour_maximum"].loc[:, str(id_patch)]
+
+        # Convert to celsius
+        t_min = t_min - 273.15
+        t_max = t_max - 273.15
 
         t_base, t_cap = 0, 30
         gdd = np.maximum(
@@ -252,7 +259,6 @@ class PASTIS_Climate_Dataset(tdata.Dataset):
 
         gdd = np.cumsum(gdd, axis=0)
         gdd = torch.tensor(gdd.iloc[dates.tolist()].values).float()
-
 
         # Calculate climate dates relative to reference_date
         climate_start_date = self.reference_date

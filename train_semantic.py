@@ -153,12 +153,12 @@ def iterate(
             data_dict = recursive_todevice(data_dict, device)
 
         x, dates = data_dict["input_satellite"]
-        input_clim, dates_clim = data_dict["input_clim"]
+        input_clim, dates_clim = data_dict["input_climate"]
         y = data_dict["target"]
         gdd = data_dict["gdd"]
 
         y = y.long()
-        gdd = (gdd * 10_000).long() # scale and convert to long tensor
+        gdd = (gdd).long() # convert to long tensor
 
         if config.pos_type is not None:
             with_gdd = True
