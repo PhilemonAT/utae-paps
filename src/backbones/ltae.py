@@ -126,7 +126,7 @@ class LTAE2d(nn.Module):
             )  # BxTxHxW
             bp = bp.permute(0, 2, 3, 1).contiguous().view(sz_b * h * w, seq_len)
             out = out + self.positional_encoder(bp)
-
+            
         out, attn = self.attention_heads(out, pad_mask=pad_mask)
 
         out = (
@@ -244,7 +244,7 @@ def get_positional_encoding(max_len, d_model, T=1000.0):
 
 
 class RNNPositionalEncoding(nn.Module):
-    def __init__(self, d_model, n_head, sinusoid=True, max_pos=10000):
+    def __init__(self, d_model, n_head, sinusoid=True, max_pos=20000):
         super().__init__()
         dim = d_model // n_head
         self.sinusoid = sinusoid
@@ -265,7 +265,9 @@ class RNNPositionalEncoding(nn.Module):
         if not self.sinusoid:
             x = x.unsqueeze(2) / self.max_pos  # normalize to [0, 1]
         else:
+            print("Now inputting to position_enc... x is equal to: ", x)
             x = self.position_enc(x)
+            print("Worked.")
         x, _ = self.rnn(x)
         x = self.mlp(x)
         x = torch.cat([x for _ in range(self.n_head)], dim=2)
