@@ -68,6 +68,7 @@ class LTAE2d(nn.Module):
                                                                     n_head=n_head, 
                                                                     sinusoid=True)
                 elif pos_type=='default':
+                    #TODO: Implement TPE-concat
                     pass
         else:
             self.positional_encoder = None
