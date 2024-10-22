@@ -176,7 +176,7 @@ def prepare_output(config, cv_type="official"):
         for fold in range(1, 6):
             os.makedirs(os.path.join(config.res_dir, cv_type, "Fold_{}".format(fold)), exist_ok=True)
     else:
-        for region in range(1, 6):
+        for region in range(1, 11):
             os.makedirs(os.path.join(config.res_dir, cv_type, "Run_{}".format(region)), exist_ok=True)
 
 def checkpoint(fold, log, config, cv_type="official"):
@@ -228,7 +228,7 @@ def overall_performance(config, cv_type="official"):
                 )
             )
     else:
-        for region in range(1, 6):
+        for region in range(1, 11):
             cm += pkl.load(
                 open(
                     os.path.join(config.res_dir, cv_type, "Run_{}".format(region), "conf_mat.pkl"),
@@ -265,7 +265,7 @@ def main(config):
 
     region_fold_sequence = [
         [[1, 2], [3], [4]]
-    ] * 5
+    ] * 10
 
     # Set all possible seeds
     random.seed(config.rdm_seed)
