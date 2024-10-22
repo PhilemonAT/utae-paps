@@ -155,15 +155,15 @@ def main(config):
                 7: 19,  # Discard class 7
                 8: 19,  # Discard class 8
                 9: 19,  # Discard class 9
-                10: 10, 
+                10: 19, # Discard class 10
                 11: 19, # Discard class 11
                 12: 12, 
                 13: 13,
-                14: 14, 
+                14: 14,
                 15: 19, # Discard class 15
-                16: 16,
+                16: 19, # Discard class 16
                 17: 17,
-                18: 18,
+                18: 19, # Discard class 18
                 19: 19,
             }
         else:

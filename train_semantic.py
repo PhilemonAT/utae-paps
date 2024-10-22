@@ -25,16 +25,11 @@ from src.learning.metrics import confusion_matrix_analysis
 from src.learning.miou import IoU
 from src.learning.weight_init import weight_init
 
-parser = argparse.ArgumentParser()
+parser = argparse.ArgumentParser(allow_abbrev=False)
 # Model parameters
-parser.add_argument(
-    "--model",
-    default="utae",
-    type=str,
-    help="Type of architecture to use. Can be one of: (utae/unet3d/fpn/convlstm/convgru/uconvlstm/buconvlstm)",
-)
+parser.add_argument("--model", default="utae", type=str, help="Type of architecture to use. Can be one of: (utae/unet3d/fpn/convlstm/convgru/uconvlstm/buconvlstm)")
 ## U-TAE Hyperparameters
-parser.add_argument("--input_dim", default=10, type=str)
+parser.add_argument("--input_dim", default=10, type=int)
 parser.add_argument("--encoder_widths", default="[64,64,64,128]", type=str)
 parser.add_argument("--decoder_widths", default="[32,32,64,128]", type=str)
 parser.add_argument("--out_conv", default="[32, 20]")
@@ -50,40 +45,14 @@ parser.add_argument("--last_relu", default=False, type=bool)
 parser.add_argument("--pos_type", default=None, type=str)
 
 # Set-up parameters
-parser.add_argument(
-    "--dataset_folder",
-    default="",
-    type=str,
-    help="Path to the folder where the results are saved.",
-)
+parser.add_argument("--dataset_folder", default="", type=str, help="Path to the folder where the results are saved.")
 parser.add_argument("--climate_folder", default="", type=str, help="Path to the climate dataset folder")
-parser.add_argument(
-    "--res_dir",
-    default="./results",
-    help="Path to the folder where the results should be stored",
-)
-parser.add_argument(
-    "--num_workers", default=8, type=int, help="Number of data loading workers"
-)
+parser.add_argument("--res_dir", default="./results", help="Path to the folder where the results should be stored")
+parser.add_argument("--num_workers", default=8, type=int, help="Number of data loading workers")
 parser.add_argument("--rdm_seed", default=1, type=int, help="Random seed")
-parser.add_argument(
-    "--device",
-    default="cuda",
-    type=str,
-    help="Name of device to use for tensor computations (cuda/cpu)",
-)
-parser.add_argument(
-    "--display_step",
-    default=50,
-    type=int,
-    help="Interval in batches between display of training metrics",
-)
-parser.add_argument(
-    "--cache",
-    dest="cache",
-    action="store_true",
-    help="If specified, the whole dataset is kept in RAM",
-)
+parser.add_argument("--device", default="cuda", type=str, help="Name of device to use for tensor computations (cuda/cpu)")
+parser.add_argument("--display_step", default=50, type=int, help="Interval in batches between display of training metrics")
+parser.add_argument("--cache", dest="cache", action="store_true", help="If specified, the whole dataset is kept in RAM")
 parser.add_argument("--apply_noise", default=True, type=bool, help="Apply Gaussian noise to the data as augmentation")
 parser.add_argument("--noise_std", default=0.01, type=float, help="Standard deviation for Gaussian noise")
 
@@ -92,42 +61,19 @@ parser.add_argument("--epochs", default=100, type=int, help="Number of epochs pe
 parser.add_argument("--batch_size", default=4, type=int, help="Batch size")
 parser.add_argument("--lr", default=0.001, type=float, help="Learning rate")
 parser.add_argument("--weight_decay", default=0.0, type=float, help="Weight decay for optimizer")
+parser.add_argument("--type_scheduler", default=None, type=str, help="The type of learning rate scheduler to use")
 parser.add_argument("--mono_date", default=None, type=str)
 parser.add_argument("--ref_date", default="2018-09-01", type=str)
-parser.add_argument(
-    "--cv_type",
-    default="official",
-    type=str,
-    help="Type of cross-validation to use. Can be one of: 'official', 'regions'.")
-parser.add_argument(
-    "--fold",
-    default=None,
-    type=int,
-    help="Do only one of the five official folds (between 1 and 5) or one of the three region folds (between 1 and 3)",
-)
+parser.add_argument("--cv_type", default="official", type=str, help="Type of cross-validation to use. Can be one of: 'official', 'regions'.")
+parser.add_argument("--fold", default=None, type=int, help="Do only one of the five official folds (between 1 and 5) or one of the three region folds (between 1 and 3)")
 parser.add_argument("--num_classes", default=20, type=int)
 parser.add_argument("--ignore_index", default=-1, type=int)
 parser.add_argument("--pad_value", default=0, type=float)
 parser.add_argument("--padding_mode", default="reflect", type=str)
-parser.add_argument(
-    "--val_every",
-    default=1,
-    type=int,
-    help="Interval in epochs between two validation steps.",
-)
-parser.add_argument(
-    "--val_after",
-    default=0,
-    type=int,
-    help="Do validation only after that many epochs.",
-)
+parser.add_argument("--val_every", default=1, type=int, help="Interval in epochs between two validation steps.")
+parser.add_argument("--val_after", default=0, type=int, help="Do validation only after that many epochs.")
 
-parser.add_argument(
-    "--experiment_name",
-    default="default_experiment",
-    type=str,
-    help="Name for the W&B experiment. Use this to distinguish between different runs.",
-)
+parser.add_argument("--experiment_name", default="default_experiment", type=str, help="Name for the W&B experiment. Use this to distinguish between different runs.")
 parser.add_argument("--run_tag", default="", type=str)
 parser.add_argument("--model_tag", default="", type=str)
 parser.add_argument("--config_tag", default="", type=str)
@@ -373,15 +319,15 @@ def main(config):
                 7: 19,  # Discard class 7
                 8: 19,  # Discard class 8
                 9: 19,  # Discard class 9
-                10: 10, 
+                10: 19, # Discard class 10
                 11: 19, # Discard class 11
                 12: 12, 
                 13: 13,
-                14: 14, 
+                14: 14,
                 15: 19, # Discard class 15
-                16: 16,
+                16: 19, # Discard class 16
                 17: 17,
-                18: 18,
+                18: 19, # Discard class 18
                 19: 19,
             }
         else:
@@ -435,6 +381,12 @@ def main(config):
         # Optimizer and Loss
         optimizer = torch.optim.Adam(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
 
+        # Learning rate scheduler
+        if config.type_scheduler == 'cosine':
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs, eta_min=1e-6)
+        elif config.type_scheduler == 'plateau':
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=5, factor=0.1)
+            
         weights = torch.ones(config.num_classes, device=device).float()
         weights[config.ignore_index] = 0
         criterion = nn.CrossEntropyLoss(weight=weights)
@@ -506,6 +458,14 @@ def main(config):
             else:
                 trainlog[epoch] = {**train_metrics}
                 checkpoint(fold + 1, trainlog, config, cv_type=config.cv_type)
+
+            if config.type_scheduler is not None:
+                # Step the scheduler at end of epoch
+                if config.type_scheduler == 'plateau':
+                    # Expects a metric to observe
+                    scheduler.step(val_metrics["val_loss"])
+                else:
+                    scheduler.step()
 
         print("Testing best epoch . . .")
         if config.cv_type=='official':

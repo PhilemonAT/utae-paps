@@ -23,12 +23,7 @@ from src.learning.weight_init import weight_init
 parser = argparse.ArgumentParser(allow_abbrev=False)
 
 # model params
-parser.add_argument(
-    "--model",
-    default="utae_fusion",
-    type=str,
-    help="Type of architecture to use. Can be one of: (utae/utae_ef/utae_mf/utae_encf/unet3d/fpn/convlstm/convgru/uconvlstm/buconvlstm)",
-)
+parser.add_argument("--model", default="utae_fusion", type=str, help="Type of architecture to use. Can be one of: (utae/utae_ef/utae_mf/utae_encf/unet3d/fpn/convlstm/convgru/uconvlstm/buconvlstm)")
 parser.add_argument("--input_dim", default=10, type=int)
 parser.add_argument("--climate_input_dim", default=11, type=int)
 parser.add_argument("--encoder_widths", default="[64,64,64,128]", type=str)
@@ -318,15 +313,15 @@ def main(config):
                 7: 19,  # Discard class 7
                 8: 19,  # Discard class 8
                 9: 19,  # Discard class 9
-                10: 10, 
+                10: 19, # Discard class 10
                 11: 19, # Discard class 11
                 12: 12, 
                 13: 13,
-                14: 14, 
+                14: 14,
                 15: 19, # Discard class 15
-                16: 16,
+                16: 19, # Discard class 16
                 17: 17,
-                18: 18,
+                18: 19, # Discard class 18
                 19: 19,
             }
         else:

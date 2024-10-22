@@ -265,9 +265,7 @@ class RNNPositionalEncoding(nn.Module):
         if not self.sinusoid:
             x = x.unsqueeze(2) / self.max_pos  # normalize to [0, 1]
         else:
-            print("Now inputting to position_enc... x is equal to: ", x)
             x = self.position_enc(x)
-            print("Worked.")
         x, _ = self.rnn(x)
         x = self.mlp(x)
         x = torch.cat([x for _ in range(self.n_head)], dim=2)
