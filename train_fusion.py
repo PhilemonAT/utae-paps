@@ -169,7 +169,7 @@ def checkpoint(fold, log, config, cv_type="official"):
             json.dump(log, outfile, indent=4)
     else:
         with open(
-            os.path.join(config.res_dir,  cv_type, "Region_{}".format(fold), "trainlog.json"), "w"
+            os.path.join(config.res_dir,  cv_type, "Run_{}".format(fold), "trainlog.json"), "w"
         ) as outfile:
             json.dump(log, outfile, indent=4)
 
@@ -187,13 +187,13 @@ def save_results(fold, metrics, conf_mat, config, cv_type="official"):
         )
     else:
         with open(
-            os.path.join(config.res_dir, cv_type, "Region_{}".format(fold), "test_metrics.json"), "w"
+            os.path.join(config.res_dir, cv_type, "Run_{}".format(fold), "test_metrics.json"), "w"
         ) as outfile:
             json.dump(metrics, outfile, indent=4)
         pkl.dump(
             conf_mat,
             open(
-                os.path.join(config.res_dir, cv_type, "Region_{}".format(fold), "conf_mat.pkl"), "wb"
+                os.path.join(config.res_dir, cv_type, "Run_{}".format(fold), "conf_mat.pkl"), "wb"
             ),
         )
 
@@ -203,8 +203,8 @@ def prepare_output(config, cv_type="official"):
         for fold in range(1, 6):
             os.makedirs(os.path.join(config.res_dir, cv_type, "Fold_{}".format(fold)), exist_ok=True)
     else:
-        for region in range(1, 6):
-            os.makedirs(os.path.join(config.res_dir, cv_type, "Region_{}".format(region)), exist_ok=True)
+        for region in range(1, 11):
+            os.makedirs(os.path.join(config.res_dir, cv_type, "Run_{}".format(region)), exist_ok=True)
 
 def recursive_todevice(x, device):
     if isinstance(x, torch.Tensor):
@@ -225,10 +225,10 @@ def overall_performance(config, cv_type="official"):
                 )
             )
     else:
-        for region in range(1, 6):
+        for region in range(1, 11):
             cm += pkl.load(
                 open(
-                    os.path.join(config.res_dir, cv_type, "Region_{}".format(region), "conf_mat.pkl"),
+                    os.path.join(config.res_dir, cv_type, "Run_{}".format(region), "conf_mat.pkl"),
                     "rb",
                 )
             )
@@ -261,7 +261,7 @@ def main(config):
 
     region_fold_sequence = [
         [[1, 2], [3], [4]]
-    ] * 5
+    ] * 10
 
     # Set all possible seeds
     random.seed(config.rdm_seed)
@@ -430,7 +430,7 @@ def main(config):
                                 "optimizer": optimizer.state_dict(),
                             },
                             os.path.join(
-                                config.res_dir, config.cv_type, "Region_{}".format(fold + 1), "model.pth.tar"
+                                config.res_dir, config.cv_type, "Run_{}".format(fold + 1), "model.pth.tar"
                             ),
                         )
             else:
@@ -458,7 +458,7 @@ def main(config):
             model.load_state_dict(
                 torch.load(
                     os.path.join(
-                        config.res_dir, config.cv_type, "Region_{}".format(fold + 1), "model.pth.tar"
+                        config.res_dir, config.cv_type, "Run_{}".format(fold + 1), "model.pth.tar"
                     )
                 )["state_dict"]
             )
