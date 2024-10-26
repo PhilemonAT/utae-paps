@@ -62,6 +62,7 @@ parser.add_argument("--epochs", default=100, type=int, help="Number of epochs pe
 parser.add_argument("--batch_size", default=4, type=int, help="Batch size")
 parser.add_argument("--lr", default=0.001, type=float, help="Learning rate")
 parser.add_argument("--weight_decay", default=0.0, type=float, help="Weight decay for optimizer")
+parser.add_argument("--type_scheduler", default=None, type=str, help="The type of learning rate scheduler to use")
 parser.add_argument("--mono_date", default=None, type=str)
 parser.add_argument("--ref_date", default="2018-09-01", type=str)
 parser.add_argument("--cv_type", default="official", type=str, help="Type of cross-validation to use ('official' or 'regions')")
@@ -376,8 +377,17 @@ def main(config):
                 print(name)
         model.apply(weight_init)
 
-        criterion = nn.CrossEntropyLoss(ignore_index=config.ignore_index)
         optimizer = torch.optim.Adam(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+
+        # Learning rate scheduler
+        if config.type_scheduler == 'cosine':
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs, eta_min=1e-6)
+        elif config.type_scheduler == 'plateau':
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=5, factor=0.1)
+
+        weights = torch.ones(config.num_classes, device=device).float()
+        weights[config.ignore_index] = 0
+        criterion = nn.CrossEntropyLoss(weight=weights)
 
         # Training loop
         trainlog = {}
@@ -423,10 +433,18 @@ def main(config):
                                 config.res_dir, config.cv_type, "Region_{}".format(fold + 1), "model.pth.tar"
                             ),
                         )
+            else:
+                trainlog[epoch] = {**train_metrics}
+                checkpoint(fold + 1, trainlog, config, cv_type=config.cv_type)
+                
+            if config.type_scheduler is not None:
+                # Step the scheduler at end of epoch
+                if config.type_scheduler == 'plateau':
+                    # Expects a metric to observe
+                    scheduler.step(val_metrics["val_loss"])
                 else:
-                    trainlog[epoch] = {**train_metrics}
-                    checkpoint(fold + 1, trainlog, config, cv_type=config.cv_type)
-        
+                    scheduler.step()
+
         print("Testing best epoch . . .")
         if config.cv_type=='official':
             model.load_state_dict(
