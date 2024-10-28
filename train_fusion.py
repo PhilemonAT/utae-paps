@@ -107,12 +107,13 @@ def iterate(model, data_loader, criterion, config, optimizer=None,
         y = data_dict["target"]
 
         if mode != "train":
-            if return_att_climate:
-                out, att_weights = model(input_sat, dates_sat, input_clim, dates_clim, 
-                                         batch_positions=dates_sat, return_att_clim=return_att_climate)
-                att_weights_epoch.append(att_weights[0]) # Only append first element (= layer)
             with torch.no_grad():
-                out = model(input_sat, dates_sat, input_clim, dates_clim, batch_positions=dates_sat)
+                if return_att_climate:
+                    out, att_weights = model(input_sat, dates_sat, input_clim, dates_clim, 
+                                            batch_positions=dates_sat, return_att_clim=return_att_climate)
+                    att_weights_epoch.append(att_weights[0]) # Only append first element (= layer)
+                else:
+                    out = model(input_sat, dates_sat, input_clim, dates_clim, batch_positions=dates_sat)
         else:
             optimizer.zero_grad()
             out = model(input_sat, dates_sat, input_clim, dates_clim, batch_positions=dates_sat)
@@ -153,9 +154,9 @@ def iterate(model, data_loader, criterion, config, optimizer=None,
     if mode == "test":
         if return_att_climate:
             # Aggregate attention weights over batch dimension
-            att_weights = torch.stack(att_weights)
-            att_weights = torch.mean(att_weights, dim = 0)
-            return metrics, iou_meter.conf_metric.value(), att_weights
+            att_weights_epoch = torch.stack(att_weights_epoch)
+            att_weights_avg = torch.mean(att_weights_epoch, dim=0)
+            return metrics, iou_meter.conf_metric.value(), att_weights_avg
         else:
             return metrics, iou_meter.conf_metric.value()
     else:
@@ -247,7 +248,7 @@ def overall_performance(config, cv_type="official"):
 
 def main(config):
     experiment_name = config.experiment_name
-    wandb.init(project="TEST", config=config, name=experiment_name,
+    wandb.init(project="FINAL_EXPERIMENTS", config=config, name=experiment_name,
                tags=[config.run_tag, config.model_tag, config.config_tag])
     wandb.config.update(vars(config))
 
@@ -353,7 +354,7 @@ def main(config):
             dt_test,
             batch_size=config.batch_size,
             shuffle=True,
-            drop_last=True,
+            drop_last=False,
             collate_fn=collate_fn,
         )
         

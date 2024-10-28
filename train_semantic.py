@@ -356,7 +356,7 @@ def main(config):
             dt_test,
             batch_size=config.batch_size,
             shuffle=True,
-            drop_last=True,
+            drop_last=False,
             collate_fn=collate_fn,
         )
 

@@ -94,7 +94,7 @@ def main(config):
 
     region_fold_sequence = [
         [[1, 2], [3], [4]]
-    ] * 5
+    ] * 10
 
 
     # Set all possible seeds
@@ -176,7 +176,7 @@ def main(config):
             dt_test,
             batch_size=config.batch_size,
             shuffle=True,
-            drop_last=True,
+            drop_last=False,
             collate_fn=collate_fn,
         )
 
