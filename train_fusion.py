@@ -378,6 +378,8 @@ def main(config):
                 print(name)
         model.apply(weight_init)
 
+        criterion = nn.CrossEntropyLoss(ignore_index=config.ignore_index)
+
         optimizer = torch.optim.Adam(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
 
         # Learning rate scheduler
@@ -386,9 +388,9 @@ def main(config):
         elif config.type_scheduler == 'plateau':
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=5, factor=0.1)
 
-        weights = torch.ones(config.num_classes, device=device).float()
-        weights[config.ignore_index] = 0
-        criterion = nn.CrossEntropyLoss(weight=weights)
+        # weights = torch.ones(config.num_classes, device=device).float()
+        # weights[config.ignore_index] = 0
+        # criterion = nn.CrossEntropyLoss(weight=weights)
 
         # Training loop
         trainlog = {}
@@ -437,7 +439,8 @@ def main(config):
             else:
                 trainlog[epoch] = {**train_metrics}
                 checkpoint(fold + 1, trainlog, config, cv_type=config.cv_type)
-                
+
+            
             if config.type_scheduler is not None:
                 # Step the scheduler at end of epoch
                 if config.type_scheduler == 'plateau':

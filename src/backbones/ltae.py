@@ -68,7 +68,7 @@ class LTAE2d(nn.Module):
                                                                     n_head=n_head, 
                                                                     sinusoid=True)
                 elif pos_type=='concat':
-                    sin_tab = get_positional_encoding(10000, self.d_model // self.n_head, T=10000)
+                    sin_tab = get_positional_encoding(20000, self.d_model // self.n_head, T=10000)
                     self.positional_encoder = nn.Embedding.from_pretrained(
                         torch.cat([sin_tab for _ in range(n_head)], dim=1), freeze=True
                     )
