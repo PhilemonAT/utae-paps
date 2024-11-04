@@ -96,6 +96,7 @@ def iterate(model, data_loader, criterion, config, optimizer=None,
 
     # Initalize list to store attention weights for whole epoch
     att_weights_epoch = []
+    dates_sat_epoch = []
 
     for i, batch in enumerate(data_loader):
         data_dict = batch
@@ -112,6 +113,7 @@ def iterate(model, data_loader, criterion, config, optimizer=None,
                     out, att_weights = model(input_sat, dates_sat, input_clim, dates_clim, 
                                             batch_positions=dates_sat, return_att_clim=return_att_climate)
                     att_weights_epoch.append(att_weights[0]) # Only append first element (= layer)
+                    dates_sat_epoch.append(dates_sat)
                 else:
                     out = model(input_sat, dates_sat, input_clim, dates_clim, batch_positions=dates_sat)
         else:
@@ -156,7 +158,11 @@ def iterate(model, data_loader, criterion, config, optimizer=None,
             # Aggregate attention weights over batch dimension
             att_weights_epoch = torch.stack(att_weights_epoch)
             att_weights_avg = torch.mean(att_weights_epoch, dim=0)
-            return metrics, iou_meter.conf_metric.value(), att_weights_avg
+            # Get unique dates for which we have a satellite obs.
+            dates_sat_concat = torch.cat(dates_sat_epoch, dim=1) # Concatenate along time dimension
+            dates_sat_unique = torch.unique(dates_sat_concat.flatten())
+            
+            return metrics, iou_meter.conf_metric.value(), att_weights_avg, dates_sat_unique
         else:
             return metrics, iou_meter.conf_metric.value()
     else:

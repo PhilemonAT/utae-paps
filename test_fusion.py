@@ -188,7 +188,7 @@ def main(config):
             )
         else:
             sd = torch.load(
-                os.path.join(config.weight_folder, config.cv_type, "Region_{}".format(fold+1), "model.pth.tar"),
+                os.path.join(config.weight_folder, config.cv_type, "Run_{}".format(fold+1), "model.pth.tar"),
                 map_location=device
             )
         model.load_state_dict(sd["state_dict"])
@@ -201,7 +201,7 @@ def main(config):
         # Inference
         print("Testing . . .")
         model.eval()
-        test_metrics, conf_mat, att_weights = iterate(
+        test_metrics, conf_mat, att_weights, dates_sat = iterate(
             model,
             data_loader=test_loader,
             criterion=criterion,
@@ -227,11 +227,23 @@ def main(config):
                     os.path.join(config.res_dir, config.cv_type, "Fold_{}".format(fold+1), "att_weights.pkl"), "wb"
                 ),
             )
+            pkl.dump(
+                dates_sat,
+                open(
+                    os.path.join(config.res_dir, config.cv_type, "Fold_{}".format(fold+1), "dates_sat.pkl"), "wb"
+                ),
+            )
         else:
             pkl.dump(
                 att_weights,
                 open(
-                    os.path.join(config.res_dir, config.cv_type, "Region_{}".format(fold+1), "att_weights.pkl"), "wb"
+                    os.path.join(config.res_dir, config.cv_type, "Run_{}".format(fold+1), "att_weights.pkl"), "wb"
+                ),
+            )
+            pkl.dump(
+                dates_sat,
+                open(
+                    os.path.join(config.res_dir, config.cv_type, "Run_{}".format(fold+1), "dates_sat.pkl"), "wb"
                 ),
             )
 
