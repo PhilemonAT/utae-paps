@@ -305,7 +305,6 @@ def main(config):
             mono_date=config.mono_date,
             target="semantic",
             sats=["S2"],
-            # apply_noise=config.apply_noise,
             noise_std=config.noise_std    
         )
 

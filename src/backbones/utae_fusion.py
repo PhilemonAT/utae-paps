@@ -123,8 +123,6 @@ class UTAE_Fusion(nn.Module):
             raise NotImplementedError(f"fusion_style: {fusion_style} not valid")
         assert not (fusion_style == "concat" and fusion_location==3), "Cannot use fusion style 'concat' with mid-fusion"
         assert not (fusion_style == "concat" and fusion_location==2), "Cannot use fusion style 'concat' with encoder-fusion"
-        assert not (matching_type in ['causal', 'noncausal'] and use_climate_mlp), "Using climate MLP with climate \
-            transformer not allowed"
 
         if encoder:
             self.return_maps = True
@@ -802,10 +800,10 @@ class PrepareMatchedDataEarly(nn.Module):
             self.climate_dim = d_model # if we processed climate data with MLP, climate dim. will be of size d_model
 
         if matching_type in ['causal', 'noncausal']:
-            assert use_climate_mlp == False, "Using climate MLP with causal fusion not implemented"
+            # assert use_climate_mlp == False, "Using climate MLP with causal fusion not implemented"
 
             self.climate_transformer_encoder = ClimateTransformerEncoder(
-                climate_input_dim=climate_input_dim,
+                climate_input_dim=self.climate_dim, # 11 if not use_climate_mlp, else d_model
                 d_model=d_model,
                 nhead=nhead_climate_transformer,
                 d_ffn=d_ffn_climate_transformer,
@@ -833,6 +831,10 @@ class PrepareMatchedDataEarly(nn.Module):
         batch_size, num_sat_timesteps, _, height, width = sat_data.size()
 
         if self.matching_type in ['causal', 'noncausal']:
+            
+            if hasattr(self, 'climate_mlp'):
+                climate_data = self.climate_mlp(climate_data)
+            
             if self.matching_type == 'causal':
                 # Create causal mask for the entire sequence
                 causal_mask = torch.triu(torch.ones((climate_dates.size(1), climate_dates.size(1)),
@@ -939,7 +941,9 @@ class ClimateTransformerEncoder(nn.Module):
         """
         super(ClimateTransformerEncoder, self).__init__()
         
-        self.climate_projection = nn.Linear(climate_input_dim, d_model)
+        if not climate_input_dim == d_model:
+            self.climate_projection = nn.Linear(climate_input_dim, d_model)
+        
         self.positional_encoding = PositionalEncoding(d_model=d_model, max_length=max_length)
         self.use_cls_token = use_cls_token
         self.d_model = d_model
@@ -968,7 +972,10 @@ class ClimateTransformerEncoder(nn.Module):
         Returns:
             Tensor: The output embedding of shape (B x d_model) if using CLS token, otherwise (B x T' x d_model).
         """
-        climate_data = self.climate_projection(climate_data) # (B x T' x d_model)
+
+        if hasattr(self, 'climate_projection'):
+            climate_data = self.climate_projection(climate_data) # (B x T' x d_model)
+        
         climate_data = self.positional_encoding(climate_data) # add positional encoding information
         batch_size, seq_len, _ = climate_data.size() 
 
