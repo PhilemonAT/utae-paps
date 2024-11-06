@@ -886,7 +886,11 @@ class PrepareMatchedDataEarly(nn.Module):
                 climate_matched.append(torch.stack(batch_climate, dim=0)) # (T x d_model)
             
             climate_matched = torch.stack(climate_matched, dim=0) # (B x T x d_model)
-            return climate_matched, weights
+            
+            if self.matching_type in ["causal", "noncausal"]:
+                return climate_matched, weights
+            else:
+                return climate_matched
 
         # other matching types ('match_dates' or 'weekly')
         climate_matched = []
@@ -918,7 +922,7 @@ class PrepareMatchedDataEarly(nn.Module):
                         clim_vec = torch.full((batch_climate_data.size(1),), float(self.pad_value), device=sat_data.device)
 
                 else:
-                    raise ValueError(f"Unknown fusion strategy: {self.matching_type}")
+                    raise NotImplementedError(f"Unknown fusion strategy: {self.matching_type}")
 
                 if hasattr(self, 'climate_mlp'):
                     clim_vec = self.climate_mlp(clim_vec) # d_model
