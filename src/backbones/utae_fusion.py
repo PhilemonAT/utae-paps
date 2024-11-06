@@ -260,7 +260,7 @@ class UTAE_Fusion(nn.Module):
                     sat_dates=sat_dates,
                     climate_data=climate_input,
                     climate_dates=climate_dates
-                ) # (B x T x V) or (B x T x d_model) if causal or MLP applied
+                ) # (B x T x V) or (B x T x d_model) if MLP applied
 
         if self.fusion_location==1:
             if self.fusion_style=="film":
