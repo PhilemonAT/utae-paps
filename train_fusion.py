@@ -305,7 +305,7 @@ def main(config):
             mono_date=config.mono_date,
             target="semantic",
             sats=["S2"],
-            apply_noise=config.apply_noise,
+            # apply_noise=config.apply_noise,
             noise_std=config.noise_std    
         )
 
@@ -335,10 +335,24 @@ def main(config):
         else:
             class_mapping = None
         
-        dt_train = PASTIS_Climate_Dataset(**dt_args, folds=train_folds, cv_type=config.cv_type, class_mapping=class_mapping, cache=config.cache)
-        dt_val = PASTIS_Climate_Dataset(**dt_args, folds=val_fold, cv_type=config.cv_type, class_mapping=class_mapping, cache=config.cache)
-        dt_test = PASTIS_Climate_Dataset(**dt_args, folds=test_fold, cv_type=config.cv_type, class_mapping=class_mapping)
-                
+        dt_train = PASTIS_Climate_Dataset(**dt_args, 
+                                          apply_noise=True,
+                                          folds=train_folds, 
+                                          cv_type=config.cv_type, 
+                                          class_mapping=class_mapping, 
+                                          cache=config.cache)
+        dt_val = PASTIS_Climate_Dataset(**dt_args, 
+                                        apply_noise=False,
+                                        folds=val_fold, 
+                                        cv_type=config.cv_type, 
+                                        class_mapping=class_mapping, 
+                                        cache=config.cache)
+        dt_test = PASTIS_Climate_Dataset(**dt_args, 
+                                         apply_noise=False,
+                                         folds=test_fold, 
+                                         cv_type=config.cv_type, 
+                                         class_mapping=class_mapping)
+
         collate_fn = lambda x: utils.pad_collate(x, pad_value=config.pad_value)
         train_loader = data.DataLoader(
             dt_train,
