@@ -812,6 +812,14 @@ class PrepareMatchedDataEarly(nn.Module):
             )
             self.climate_dim = d_model  # if we used causal transformer for climate data, climate dim. will be of size d_model
 
+        if matching_type == 'gru':
+            self.climate_gru = ClimateGRU(
+                climate_input_dim=self.climate_dim,
+                d_model=d_model,
+            )
+            self.climate_dim = d_model
+
+
     def transform_climate_data(self, sat_data, sat_dates, climate_data, climate_dates, get_weights=False):
         """
         Fuses satellite and climate data based on the chosen fusion strategy.
@@ -830,7 +838,7 @@ class PrepareMatchedDataEarly(nn.Module):
 
         batch_size, num_sat_timesteps, _, height, width = sat_data.size()
 
-        if self.matching_type in ['causal', 'noncausal']:
+        if self.matching_type in ['causal', 'noncausal', 'gru']:  #TODO: Add GRU option here as well
             
             if hasattr(self, 'climate_mlp'):
                 climate_data = self.climate_mlp(climate_data)
@@ -850,9 +858,13 @@ class PrepareMatchedDataEarly(nn.Module):
                 # compute climate embeddings for the entire sequence
                 climate_embeddings, weights = self.climate_transformer_encoder(climate_data, 
                                                                                mask=causal_mask) # (B x T' x d_model)
-            else:
+            elif self.matching_type == 'noncausal':
                 # Use non-causal transformer (which is able to see all the data) to process the climate data
                 climate_embeddings, weights = self.climate_transformer_encoder(climate_data)
+
+            elif self.matching_type == 'gru':
+                # Use GRU to process the climate data
+                climate_embeddings = self.climate_gru(climate_data) # (B x T' x d_model)
 
             climate_matched = []
 
@@ -998,6 +1010,40 @@ class ClimateTransformerEncoder(nn.Module):
         else:
             return climate_embedding, weights # (B x T' x d_model)
 
+
+class ClimateGRU(nn.Module):
+    def __init__(self,
+                 climate_input_dim=11,
+                 d_model=64,
+                 num_layers=1):
+        super(ClimateGRU, self).__init__()
+
+        if not climate_input_dim == d_model: # (use_climate_mlp was false)
+            self.climate_projection = nn.Linear(climate_input_dim, d_model)
+        
+        self.d_model = d_model
+        self.num_layers = num_layers
+
+        self.GRU = nn.GRU(input_size=d_model,
+                          hidden_size=d_model,
+                          num_layers=num_layers,
+                          batch_first=True,
+                          bidirectional=True)
+        
+        self.reduce_fc = nn.Linear(2 * self.d_model, self.d_model)
+        
+    def forward(self, climate_data):
+        if hasattr(self, 'climate_projection'):
+            climate_data = self.climate_projection(climate_data) # (B x T' x d_model)
+        
+        batch_size, _, _ = climate_data.size()
+
+        output, _ = self.GRU(climate_data) # (batch_size, seq_len, 2 * d_model)
+        
+        climate_embedding = self.reduce_fc(output) # (batch_size, seq_len, d_model)
+        
+        return climate_embedding
+        
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_length = 5000):
