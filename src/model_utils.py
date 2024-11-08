@@ -37,6 +37,7 @@ def get_model(config, mode="semantic"):
                 encoder_norm=config.encoder_norm,
                 n_head=config.n_head,
                 d_model=config.d_model,
+                d_model_climate=config.d_model_climate,
                 d_k=config.d_k,
                 encoder=config.encoder,
                 return_maps=config.return_maps,

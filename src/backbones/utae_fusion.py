@@ -35,6 +35,7 @@ class UTAE_Fusion(nn.Module):
         encoder_norm="group",
         n_head=16,
         d_model=256,
+        d_model_climate=64,
         d_k=4,
         encoder=False,
         return_maps=False,
@@ -141,11 +142,13 @@ class UTAE_Fusion(nn.Module):
             self.matchclimate = PrepareMatchedDataEarly(climate_input_dim=climate_input_dim,
                                                         matching_type=matching_type,
                                                         use_climate_mlp=use_climate_mlp,
+                                                        d_model=d_model_climate,
                                                         pad_value=pad_value)
             self.climate_dim = self.matchclimate.climate_dim
 
         elif fusion_location==4:
             self.climate_transformer_encoder = ClimateTransformerEncoder(climate_input_dim=climate_input_dim,
+                                                                         d_model=d_model_climate,
                                                                          use_cls_token=True)
             self.climate_dim = self.climate_transformer_encoder.d_model
 
@@ -1019,7 +1022,7 @@ class ClimateGRU(nn.Module):
     def __init__(self,
                  climate_input_dim=11,
                  d_model=64,
-                 num_layers=1):
+                 num_layers=2):
         super(ClimateGRU, self).__init__()
 
         if not climate_input_dim == d_model: # (use_climate_mlp was false)
