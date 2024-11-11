@@ -46,6 +46,7 @@ class UTAE_Fusion(nn.Module):
         fusion_location=1,
         fusion_style="film",
         residual_film=False,
+        bidirectional_GRU=False,
     ):
         """
         U-TAE architecture for spatio-temporal encoding of satellite image time series.
@@ -143,14 +144,22 @@ class UTAE_Fusion(nn.Module):
                                                         matching_type=matching_type,
                                                         use_climate_mlp=use_climate_mlp,
                                                         d_model=d_model_climate,
-                                                        pad_value=pad_value)
+                                                        pad_value=pad_value,
+                                                        bidirectional=bidirectional_GRU)
             self.climate_dim = self.matchclimate.climate_dim
 
         elif fusion_location==4:
-            self.climate_transformer_encoder = ClimateTransformerEncoder(climate_input_dim=climate_input_dim,
-                                                                         d_model=d_model_climate,
-                                                                         use_cls_token=True)
-            self.climate_dim = self.climate_transformer_encoder.d_model
+            if self.matching_type == "gru":
+                self.climate_gru = ClimateGRU(climate_input_dim=climate_input_dim,
+                                              d_model=d_model_climate,
+                                              bidirectional=bidirectional_GRU,
+                                              return_last_h=True)
+                self.climate_dim = self.climate_gru.d_model
+            else:
+                self.climate_transformer_encoder = ClimateTransformerEncoder(climate_input_dim=climate_input_dim,
+                                                                             d_model=d_model_climate,
+                                                                             use_cls_token=True)
+                self.climate_dim = self.climate_transformer_encoder.d_model
 
         # ------------------------------------------------------------------------------------------
         # Determine input_dim to in_conv based on fusion strategy applied
@@ -313,7 +322,10 @@ class UTAE_Fusion(nn.Module):
                 maps.append(out)
 
         if self.fusion_location==4:
-            climate_embedding, weights = self.climate_transformer_encoder(climate_input) # (B x d_model)
+            if self.matching_type == 'gru':
+                climate_embedding = self.climate_gru(climate_input)
+            else:
+                climate_embedding, weights = self.climate_transformer_encoder(climate_input) # (B x d_model)
             if self.fusion_style=="film":
                 out = self.FiLM_Layer(sat_features=out, 
                                       clim_vec=climate_embedding, 
@@ -764,6 +776,7 @@ class PrepareMatchedDataEarly(nn.Module):
                  nhead_climate_transformer=4,
                  d_ffn_climate_transformer=128,
                  num_layers_climate_transformer=1,
+                 bidirectional=False,
                  pad_value=-1000):
         """
         Initializes the EarlyFusionModel, which integrates climate data into the satellite 
@@ -819,6 +832,8 @@ class PrepareMatchedDataEarly(nn.Module):
             self.climate_gru = ClimateGRU(
                 climate_input_dim=self.climate_dim,
                 d_model=d_model,
+                bidirectional=bidirectional, 
+                return_last_h=False # need per time step embeddings/outputs
             )
             self.climate_dim = d_model
 
@@ -1022,7 +1037,9 @@ class ClimateGRU(nn.Module):
     def __init__(self,
                  climate_input_dim=11,
                  d_model=64,
-                 num_layers=2):
+                 num_layers=2,
+                 bidirectional=False,
+                 return_last_h=False):
         super(ClimateGRU, self).__init__()
 
         if not climate_input_dim == d_model: # (use_climate_mlp was false)
@@ -1030,26 +1047,50 @@ class ClimateGRU(nn.Module):
         
         self.d_model = d_model
         self.num_layers = num_layers
+        self.return_last_h = return_last_h
+        self.bidirectional = bidirectional
 
         self.GRU = nn.GRU(input_size=d_model,
                           hidden_size=d_model,
                           num_layers=num_layers,
                           batch_first=True,
-                          bidirectional=True)
+                          bidirectional=bidirectional)
         
-        self.reduce_fc = nn.Linear(2 * self.d_model, self.d_model)
-        
+        self.D = 2 if bidirectional else 1
+
+        if bidirectional:
+            self.reduce_fc = nn.Linear(self.D * self.d_model, self.d_model)
+
+        print("self.D = ", self.D)
+
     def forward(self, climate_data):
         if hasattr(self, 'climate_projection'):
             climate_data = self.climate_projection(climate_data) # (B x T' x d_model)
         
         batch_size, _, _ = climate_data.size()
 
-        output, _ = self.GRU(climate_data) # (batch_size, seq_len, 2 * d_model)
+        # output of size (batch_size, seq_len, self.D * d_model)
+        # hidden of size (self.D * num_layers, batch_size, d_model)
+        output, hidden = self.GRU(climate_data)
         
-        climate_embedding = self.reduce_fc(output) # (batch_size, seq_len, d_model)
-        
-        return climate_embedding
+        if self.return_last_h:
+            # Use the final hidden state(s) as the embedding (no seq-dim)
+            if self.bidirectional:
+                # Concatenate the hidden states from both directions if bidirectional
+                climate_embedding = torch.cat((hidden[-2], hidden[-1]), dim=1)  # (batch_size, 2 * d_model)
+                climate_embedding = self.reduce_fc(climate_embedding) # (batch_size, d_model)
+                return climate_embedding
+            else:
+                climate_embedding = hidden[-1]  # (batch_size, d_model)
+                return climate_embedding
+        else:
+            if self.bidirectional:
+                # Return the predictions for every timepoint (seq-dim)
+                climate_embedding = self.reduce_fc(output) # (batch_size, seq_len, d_model)
+                return climate_embedding
+            else:
+                climate_embedding = output # (batch_size, seq_len, d_model)
+                return climate_embedding
         
 
 class PositionalEncoding(nn.Module):

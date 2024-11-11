@@ -47,7 +47,8 @@ def get_model(config, mode="semantic"):
                 use_climate_mlp=config.use_climate_mlp,
                 fusion_location=config.fusion_location,
                 fusion_style=config.fusion_style,
-                residual_film=config.residual_film
+                residual_film=config.residual_film,
+                bidirectional_GRU=config.bidirectional_GRU
             )
         elif config.model == "unet3d":
             model = unet3d.UNet3D(

@@ -45,6 +45,7 @@ parser.add_argument("--use_climate_mlp", default=False, type=bool)
 parser.add_argument("--fusion_location", default=4, type=int)
 parser.add_argument("--fusion_style", default="film", type=str)
 parser.add_argument("--residual_film", default=False, type=bool)
+parser.add_argument("--bidirectional_GRU", default=False, type=bool)
 
 # Set-up parameters
 parser.add_argument("--dataset_folder", default="", type=str, help="Path to the dataset folder")
@@ -255,7 +256,7 @@ def overall_performance(config, cv_type="official"):
 
 def main(config):
     experiment_name = config.experiment_name
-    wandb.init(project="FINAL_EXPERIMENTS", config=config, name=experiment_name,
+    wandb.init(project="TEST", config=config, name=experiment_name,
                tags=[config.run_tag, config.model_tag, config.config_tag])
     wandb.config.update(vars(config))
 
