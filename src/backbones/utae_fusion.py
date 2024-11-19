@@ -86,6 +86,7 @@ class UTAE_Fusion(nn.Module):
                                 - 'weekly': Use climate data from the whole week prior to each satellite observation.
                                 - 'causal': Use a causal transformer to incorporate climate data sequentially.            
                                 - 'noncausal': Use a transformer (without causal mask) to incorporate climate data sequentially.
+                                - 'gru': Use a GRU
             use_climate_mlp (bool): If True, a small MLP processes the climate data before fusion to 
                                     align it with the satellite data's dimensions.
             climate_dim (int): The dimension of the climate data processed by the EarlyFusionModel
